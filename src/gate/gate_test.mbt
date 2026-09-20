@@ -54,8 +54,8 @@ fn research_batch() -> @arrow.RecordBatch {
 }
 
 ///|
-fn research_policy(max_findings? : Int = 100) -> PrivacyPolicy {
-  PrivacyPolicy::new(
+fn research_policy(max_findings? : Int = 100) -> @gate.PrivacyPolicy {
+  @gate.PrivacyPolicy::new(
     "fraud-research-v1",
     ["fraud_research"],
     [@gate.Partner],
@@ -98,8 +98,8 @@ fn research_policy(max_findings? : Int = 100) -> PrivacyPolicy {
 }
 
 ///|
-fn research_request() -> ReleaseRequest {
-  ReleaseRequest::new("req-2026-001", "fraud_research", @gate.Partner).unwrap()
+fn research_request() -> @gate.ReleaseRequest {
+  @gate.ReleaseRequest::new("req-2026-001", "fraud_research", @gate.Partner).unwrap()
 }
 
 ///|
@@ -133,7 +133,11 @@ test "release binds purpose, consent, k-anonymity, and minimization" {
 
 ///|
 test "unapproved purpose denies the complete release" {
-  let request = ReleaseRequest::new("req-purpose", "advertising", @gate.Partner).unwrap()
+  let request = @gate.ReleaseRequest::new(
+    "req-purpose",
+    "advertising",
+    @gate.Partner,
+  ).unwrap()
   let bundle = research_policy().release(research_batch(), request).unwrap()
   assert_eq(bundle.report().decision(), "denied")
   assert_eq(bundle.report().approved_row_count(), 0)
@@ -144,7 +148,7 @@ test "unapproved purpose denies the complete release" {
 
 ///|
 test "unapproved recipient denies the complete release" {
-  let request = ReleaseRequest::new(
+  let request = @gate.ReleaseRequest::new(
     "req-recipient",
     "fraud_research",
     @gate.Public,
@@ -157,7 +161,7 @@ test "unapproved recipient denies the complete release" {
 ///|
 test "policies are fail-closed" {
   assert_true(
-    PrivacyPolicy::new(
+    @gate.PrivacyPolicy::new(
       "unsafe",
       ["analytics"],
       [@gate.Partner],
@@ -178,7 +182,7 @@ test "policies are fail-closed" {
     is Err(@gate.InvalidPolicy(_)),
   )
   assert_true(
-    PrivacyPolicy::new(
+    @gate.PrivacyPolicy::new(
       "bad-k",
       ["analytics"],
       [@gate.Partner],
@@ -195,7 +199,7 @@ test "policies are fail-closed" {
     is Err(@gate.InvalidPolicy(_)),
   )
   assert_true(
-    ReleaseRequest::new("", "analytics", @gate.Internal)
+    @gate.ReleaseRequest::new("", "analytics", @gate.Internal)
     is Err(@gate.InvalidRequest(_)),
   )
 }
