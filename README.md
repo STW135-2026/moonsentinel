@@ -2,19 +2,27 @@
 
 [![CI](https://github.com/STW135-2026/moonsentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/STW135-2026/moonsentinel/actions/workflows/ci.yml)
 
-MoonSentinel 是面向 MoonBit 的 Arrow 数据发布门禁。它在数据进入分析、浏览器应用或 AI 工作流前执行确定性的质量规则，将合法行、隔离行和结构化诊断分别输出为 Arrow RecordBatch，并可在放行前脱敏 UTF-8 敏感列。
+MoonSentinel 是用 MoonBit 编写的**用途绑定隐私发布门禁**。它接收 Arrow
+`RecordBatch`、`PrivacyPolicy` 和 `ReleaseRequest`，在数据离开当前信任边界前检查：
+本次用途是否获准、接收方是否获准、每行是否有对应同意，以及准标识符组合是否达到
+指定的 k-匿名阈值。通过的行会按最小化策略投影和脱敏，同时生成可归档的发布清单。
 
-项目直接使用 [`shunge/arrow@0.1.0`](https://mooncakes.io/docs/shunge/arrow@0.1.0) 的 Schema、Column、RecordBatch 和 IPC 能力，不实现 DataFrame、查询引擎、Arrow IPC、JSON Schema 或 Schema 版本管理。
+项目不再提供通用数据质量合同、非空/范围/枚举/唯一性规则、数据画像、合同差异或
+CSV/JSONL 校验 CLI。上述能力属于
+[`MoonVerity`](https://github.com/Wchwch777/MoonVerity) 的公开范围，不是本项目成果。
 
 ## 已实现
 
-- 8 类声明式规则：必需列、非空、Int32/Int64 范围、非空字符串、字符串允许列表、字符串唯一性和 Int32 跨字段顺序。
-- `Error` 与 `Warning` 两级结果。错误隔离对应行；数据集级错误隔离整个批次；警告只记录，不阻断放行。
-- 确定性执行顺序和有上限的诊断收集。即使诊断被截断，错误数和警告数仍保持准确。
-- 一次 `release` 生成 approved、quarantine 和 findings 三个 Arrow RecordBatch。
-- 仅对 approved 数据应用 UTF-8 替换脱敏，quarantine 保留原值用于受控排查。
-- 合同、输入批次和脱敏策略的结构化错误处理。
-- Native、JavaScript、Wasm、Wasm-GC 四后端检查与测试。
+- `ReleaseRequest` 将请求编号、处理用途和接收方信任边界绑定到一次发布；
+- 用途和接收方双重允许列表，任一不匹配时整批拒绝；
+- 逐行同意检查：缺失同意或同意值不覆盖当前用途时隔离该行；
+- 对获准候选行执行多列 k-匿名检查，稀有准标识符组合不会被发布；
+- 默认拒绝的字段最小化：未写入列策略的输入列不会进入输出；
+- `DirectIdentifier` 和 `Sensitive` 列不能以 `Keep` 方式发布；
+- `Keep`、`ReplaceUtf8`、`Drop` 三种输出处置；
+- `approved`、`quarantine`、`privacy_findings`、`release_manifest` 四个 Arrow 输出；
+- findings 数量可设上限，但拒绝总数和行处置仍保持准确；
+- Native、JavaScript、Wasm、Wasm-GC 四目标自动检查和测试。
 
 ## 三分钟验证
 
@@ -26,81 +34,116 @@ moon test --target all --deny-warn
 moon run cmd/main --target native --deny-warn
 ```
 
-当前演示使用 4 行客户导出数据，运行唯一性、年龄范围、国家允许列表、订单上下界和邮件完整性规则。实际输出为：
+演示模拟一次面向合作方的反欺诈研究数据发布。6 行源数据中，1 行没有对应用途的同意，
+1 行因 `country + age_band` 组合未达到 `k=2` 被隔离；直接标识符和同意列被删除，邮件
+被替换后只发布 4 行：
 
 ```text
-MoonSentinel release gate
-customer-export-v1: FAIL; rows=4; accepted=1; quarantined=3; errors=7; warnings=1; findings_shown=8; truncated=false
-approved rows: 1
-quarantined rows: 3
-diagnostic rows: 8
-approved email: [REDACTED]
+MoonSentinel purpose-bound privacy release
+fraud-research-v1/req-2026-001: partial; purpose=fraud_research; recipient=partner; rows=6; released=4; quarantined=2; denials=2; k=2; findings_shown=2; truncated=false
+released columns: email, country, age_band, risk_score
+approved rows: 4
+quarantined rows: 2
+privacy findings: 2
+release manifest rows: 1
+masked email: [EMAIL]
+Arrow IPC handoff: 1136 bytes, 4 released rows
 ```
 
-## 使用示例
+IPC 字节数可能随底层 Arrow 版本变化；决策、行数、列名和脱敏结果是验收依据。
+
+## API 示例
 
 ```mbt
-let contract = @gate.Contract::new("customer-export-v1", [
-  @gate.RequiredColumn(
-    "schema.customer_id",
-    "customer_id",
-    @arrow.Utf8,
-    @gate.Error,
-  ),
-  @gate.NotNull(
-    "quality.customer_id.required",
-    "customer_id",
-    @gate.Error,
-  ),
-  @gate.Utf8Unique(
-    "quality.customer_id.unique",
-    "customer_id",
-    @gate.Error,
-  ),
-  @gate.Int32Range(
-    "quality.age.range",
-    "age",
-    Some(0),
-    Some(120),
-    @gate.Error,
-  ),
-]).unwrap()
-
-let bundle = contract.release(
-  batch,
-  redactions=[@gate.ReplaceUtf8("email", "[REDACTED]")],
+let policy = @gate.PrivacyPolicy::new(
+  "fraud-research-v1",
+  ["fraud_research"],
+  [@gate.Partner],
+  { column: "research_consent", granted_values: ["yes"] },
+  [
+    {
+      column: "user_id",
+      classification: @gate.DirectIdentifier,
+      treatment: @gate.Drop,
+    },
+    {
+      column: "email",
+      classification: @gate.Sensitive,
+      treatment: @gate.ReplaceUtf8("[EMAIL]"),
+    },
+    {
+      column: "country",
+      classification: @gate.QuasiIdentifier,
+      treatment: @gate.Keep,
+    },
+    {
+      column: "age_band",
+      classification: @gate.QuasiIdentifier,
+      treatment: @gate.Keep,
+    },
+  ],
+  minimum_group_size=2,
 ).unwrap()
 
-let approved = bundle.approved()
-let quarantine = bundle.quarantine()
-let findings = bundle.findings()
+let request = @gate.ReleaseRequest::new(
+  "req-2026-001",
+  "fraud_research",
+  @gate.Partner,
+).unwrap()
+
+let bundle = policy.release(batch, request).unwrap()
+let safe_rows = bundle.approved()
+let controlled_quarantine = bundle.quarantine()
+let denials = bundle.findings()
+let manifest = bundle.manifest()
 ```
 
-findings 批次包含 `rule_id`、`severity`、`row`、`column`、`code` 和 `message`，可直接写入 Arrow IPC、交给审计系统或在前端展示。
+## 与 MoonVerity 的实质差异
 
-## 与现有项目的边界
-
-| 项目 | 已有职责 | MoonSentinel 的职责 |
+| 维度 | MoonVerity | MoonSentinel |
 | --- | --- | --- |
-| [`shunge/arrow`](https://mooncakes.io/docs/shunge/arrow@0.1.0) | Arrow 数据结构、IPC Stream/File 和互操作 | 消费 RecordBatch，执行发布门禁并产出新的 RecordBatch |
-| [`MoonFrame`](https://github.com/ihb2032/MoonFrame) | DataFrame、表达式、过滤、排序、分组、连接和惰性查询 | 不提供查询算子；负责质量判定、隔离、诊断和脱敏 |
-| [`moon-data-contract`](https://mooncakes.io/docs/lyjttio/moon-data-contract@0.2.1) | Schema 治理、版本演进、兼容性和迁移计划 | 不管理 Schema 版本；检查批次中的实际行并执行放行决策 |
-| [`moonbit-jsonschema`](https://mooncakes.io/docs/Xu107-hhh/moonbit-jsonschema) | JSON Schema 验证 | 不解析 JSON Schema；面向 Arrow 列和行 |
-| [`MoonJQ`](https://github.com/moonbit-community/moonbit-jq) | JSON 查询解释器 | 不查询 JSON；输出 Arrow 原生审计结果 |
+| 核心问题 | 数据是否满足 schema 与质量规则 | 数据是否被授权向特定接收方用于特定目的 |
+| 输入 | CSV/JSONL、数据合同 | Arrow RecordBatch、隐私政策、发布请求 |
+| 核心算法 | 完整性、枚举、范围、唯一性、画像、合同 diff | 用途/接收方授权、逐行同意、k-匿名、字段最小化 |
+| 输出 | 文本/JSON 校验报告和画像 | 最小化数据、受控隔离、隐私拒绝、发布清单，均为 Arrow |
+| 当前 API | `Contract`、`Rule`、`ValidationReport` | `PrivacyPolicy`、`ReleaseRequest`、`PrivacyReport` |
 
-旧版 MoonQuery 查询引擎因与 MoonFrame 的功能范围重合，已经从当前代码树移除。Git 历史完整保留这次边界调整。
+完整的逐项代码证据见[差异化核查](docs/DIFFERENTIATION.zh-CN.md)。
+
+## 处理顺序
+
+```text
+RecordBatch + PrivacyPolicy + ReleaseRequest
+                    |
+                    v
+       purpose / recipient authorization
+                    |
+                    v
+              row consent check
+                    |
+                    v
+      k-anonymity on eligible candidates
+                    |
+                    v
+     fail-closed projection and masking
+          /        |        |       \
+   approved  quarantine  findings  manifest
+```
 
 ## 当前边界
 
-- 当前规则以可审计的基础约束为主，还没有正则表达式、条件规则或跨批次状态。
-- `Utf8Unique` 在单个 RecordBatch 内检查，采用确定性双循环，MVP 优先保证语义和可复现性。
-- 脱敏目前提供 UTF-8 固定替换；哈希、部分保留和密钥托管不在当前版本中。
-- 数据读取和写出由 `shunge/arrow` 负责；MoonSentinel 不重复实现 IPC。
+- k-匿名在单个 `RecordBatch` 内计算；还没有跨批次状态或 l-diversity；
+- 当前脱敏为 UTF-8 固定替换，不声称是密码学匿名化；
+- 当前接收方只有 `Internal`、`Partner`、`Public` 三档；
+- quarantine 保留源列，必须由调用方存放在受控区域；
+- 数据读写由 `shunge/arrow@0.1.0` 提供，本项目不重复实现 IPC；
+- 本工具提供技术门禁，不替代组织的法务判断或合规审批。
 
 ## 文档
 
 - [项目申报书](docs/PROPOSAL.zh-CN.md)
-- [差异化核查](docs/DIFFERENTIATION.zh-CN.md)
+- [与 MoonVerity 的差异化核查](docs/DIFFERENTIATION.zh-CN.md)
+- [开发与差异化记录](docs/DEVELOPMENT_LOG.zh-CN.md)
 - [技术架构](docs/ARCHITECTURE.md)
 - [演示步骤](docs/DEMO.zh-CN.md)
 

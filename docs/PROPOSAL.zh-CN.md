@@ -1,130 +1,165 @@
 # MoonSentinel 项目申报书
 
-## 一 项目基本信息
+## 一、项目基本信息
 
 - 项目名称：MoonSentinel
-- 项目副标题：面向 Arrow 数据的质量与隐私发布门禁
+- 项目副标题：用途绑定的 Arrow 隐私发布门禁
 - 项目负责人：苏天纬
 - 开源许可证：Apache-2.0
 - 代码仓库：<https://github.com/STW135-2026/moonsentinel>
 - 底层依赖：`shunge/arrow@0.1.0`，MIT 许可证
 
-## 二 项目简介
+## 二、项目定位
 
-MoonSentinel 是使用 MoonBit 编写的 Arrow 数据发布门禁。系统接收一个 Arrow RecordBatch 和一组声明式规则，逐行检查质量问题，区分阻断错误与非阻断警告，再生成获准数据、隔离数据和结构化诊断三个 RecordBatch。获准数据还可在交付前替换敏感 UTF-8 字段。
+MoonSentinel 使用 MoonBit 在 Arrow 数据离开当前信任边界之前执行隐私发布决策。一次
+调用同时提供 `RecordBatch`、隐私政策和发布请求；发布请求包含可追踪编号、具体处理用途
+及接收方级别。系统依次核验用途授权、接收方授权、逐行同意和 k-匿名阈值，再按照默认
+拒绝的列策略删除直接标识符、替换敏感文本并生成发布清单。
 
-该项目解决的是数据已经能够交换，但尚不能安全发布的问题。它不提供过滤、排序、分组或连接等通用查询能力，也不实现 Arrow IPC、JSON Schema、Schema 版本治理或迁移计划。
+项目解决“这批数据能否为这次用途交给这个接收方”的问题，而不是“数据是否满足一般
+质量规则”的问题。
 
-## 三 问题和实际价值
+## 三、实际问题与应用价值
 
-数据库、Python 数据工具和浏览器应用可以使用 Arrow 交换列式数据，但格式正确并不代表内容可直接发布。真实批次可能包含重复标识、越界年龄、无效枚举、颠倒的上下界、缺失联系方式或未脱敏字段。若每个应用分别编写临时检查逻辑，规则、错误格式和处置方式会逐渐不一致。
+数据格式正确、内容完整，并不代表它可以被合法或安全地发布。即使一个数据集已经通过
+非空、范围、枚举和唯一性检查，仍可能出现以下风险：
 
-MoonSentinel 把这一步收敛为可测试的发布门禁，适用于以下场景：
+1. 数据主体只同意反欺诈研究，数据却被用于广告；
+2. 内部可见的数据被直接交给合作方或公开发布；
+3. 姓名和账号被删除后，地区、年龄段等准标识符组合仍能识别少数个体；
+4. 调用方忘记删除新加入的敏感列；
+5. 发布后无法回答由谁、以何用途、按哪份政策放行了哪些列。
 
-1. 数据产品发布。导出数据只有通过质量规则后才能进入报表、下载文件或下游 API。
-2. 浏览器与边缘应用。MoonBit/Wasm 在本地检查 Arrow 数据，错误行不进入后续计算。
-3. AI 数据准备。进入模型或检索流程前，先隔离错误行并替换敏感文本字段。
-4. 数据管道排错。诊断结果仍是 Arrow RecordBatch，可写入 IPC、存档或展示。
+MoonSentinel 将这些检查和处置组合成一个失败即关闭的接口，适用于研究数据出域、合作方
+数据交付、AI 训练样本准备和浏览器本地隐私筛选。
 
-## 四 已完成成果
+## 四、目标用户
 
-当前代码已经实现并通过自动测试：
+- 需要向研究团队或合作方交付 Arrow 数据的工程团队；
+- 在 MoonBit/Wasm 中执行本地隐私检查的浏览器与边缘应用；
+- 需要将发布请求、处置结果和发布字段存档的审计系统；
+- 希望在数据质量工具之后增加独立隐私门禁的 MoonBit 项目。
 
-- 8 类规则：必需列、非空、Int32 范围、Int64 范围、非空字符串、字符串允许列表、字符串唯一性和 Int32 跨字段顺序。
-- `Error` 与 `Warning` 两级严重度。错误隔离行，警告只进入报告。
-- 缺失列和类型错误作为数据集级问题处理；数据集级错误阻止整个批次放行。
-- 规则按声明顺序执行，行按源顺序检查，结果可复现。
-- 诊断数量可设上限；即使只保留部分诊断，总错误数和警告数仍准确。
-- `release` 同时生成 approved、quarantine 和 findings 三个 Arrow RecordBatch。
-- UTF-8 固定替换只应用于 approved，quarantine 保留原值供受控排查。
-- 合同定义、输入批次和脱敏配置均有结构化错误。
-- 诊断批次可由 `shunge/arrow` 写入 IPC Stream 并重新读取。
-- 7 项测试在 Native、JavaScript、Wasm、Wasm-GC 四个目标上全部通过。
+## 五、已完成的核心能力
 
-## 五 核心流程
+1. **用途绑定**：`ReleaseRequest` 明确 request id、purpose 和 recipient；
+2. **接收方边界**：区分 Internal、Partner 和 Public，未列入政策即整批拒绝；
+3. **逐行同意**：同意字段缺失或同意值不覆盖请求用途时隔离对应行；
+4. **k-匿名**：在已通过同意检查的候选行上，对多个准标识符组成的等价类执行最小组
+   大小检查；
+5. **数据最小化**：只有列政策明确选择的列可进入 approved，未配置列默认删除；
+6. **安全处置**：直接标识符和敏感列在策略构造时就禁止 `Keep`，只能删除或替换；
+7. **四类 Arrow 输出**：approved、quarantine、privacy findings 和 release manifest；
+8. **有界诊断**：可限制保存的 finding 数量，但拒绝总数和行处置保持准确；
+9. **跨目标验证**：Native、JavaScript、Wasm、Wasm-GC 使用同一套隐私语义。
 
-MoonSentinel 的处理顺序如下：
-
-1. 校验 Arrow RecordBatch 自身的字段数量、列长度、类型和 nullability。
-2. 校验合同名称、规则编号、范围端点、允许列表和规则编号唯一性。
-3. 按规则声明顺序检查 Schema 和行值，并累计错误和警告。
-4. 错误对应的行进入 quarantine；没有错误的行进入 approved。
-5. 只对 approved 执行配置的字段替换脱敏。
-6. 将诊断转换为包含六个字段的 Arrow RecordBatch。
-
-findings 的字段为 `rule_id`、`severity`、`row`、`column`、`code` 和 `message`。其中 `row` 为空表示缺失列或类型不符等数据集级问题。
-
-## 六 示例结果
-
-仓库演示构造 4 行客户导出数据，并检查客户编号唯一性、年龄范围、国家允许列表、订单上下界和邮件完整性。实际运行结果为：
+## 六、核心流程
 
 ```text
-customer-export-v1: FAIL; rows=4; accepted=1; quarantined=3; errors=7; warnings=1; findings_shown=8; truncated=false
-approved rows: 1
-quarantined rows: 3
-diagnostic rows: 8
-approved email: [REDACTED]
+Arrow RecordBatch + PrivacyPolicy + ReleaseRequest
+                       |
+                       v
+       purpose / recipient authorization
+                       |
+                       v
+                 row consent
+                       |
+                       v
+       k-anonymity on eligible candidates
+                       |
+                       v
+        projection / masking / manifest
+          /          |          |          \
+    approved    quarantine   findings    manifest
 ```
 
-运行命令：
+整批拒绝时 approved 是零列零行的空批次，不返回可推断的发布 schema；quarantine 仅用于
+调用方受控排查。部分行被拒绝时，其余行仍可按同一隐私政策发布。
 
-```sh
-moon update
-moon fmt --check
-moon check --target all --deny-warn
-moon test --target all --deny-warn
-moon run cmd/main --target native --deny-warn
+## 七、可运行示例
+
+演示构造 6 行反欺诈研究数据：
+
+- `user_id` 是直接标识符，必须删除；
+- `email` 是敏感字段，发布时替换为 `[EMAIL]`；
+- `research_consent` 决定每行能否用于 `fraud_research`；
+- `country + age_band` 是准标识符组合，要求 `k >= 2`；
+- 接收方必须是政策允许的 `Partner`。
+
+实际输出：
+
+```text
+fraud-research-v1/req-2026-001: partial; purpose=fraud_research; recipient=partner; rows=6; released=4; quarantined=2; denials=2; k=2; findings_shown=2; truncated=false
+released columns: email, country, age_band, risk_score
+approved rows: 4
+quarantined rows: 2
+privacy findings: 2
+release manifest rows: 1
+masked email: [EMAIL]
 ```
 
-## 七 与现有项目的差异
+其中 1 行因缺少对应同意被隔离，1 行因准标识符等价类只有一个成员被隔离。
 
-| 对比项目 | 已有能力 | MoonSentinel 的边界 |
+## 八、与 MoonVerity 的逐项差异
+
+审核意见指出本项目与近期可用的 MoonVerity 存在重合。项目于 2026-09-20 重新核查
+[`Wchwch777/MoonVerity`](https://github.com/Wchwch777/MoonVerity) 的公开 README、申报书、
+架构、核心类型、验证规则和 CLI，并据此删除了重合职责。
+
+| 维度 | MoonVerity | 当前 MoonSentinel |
 | --- | --- | --- |
-| `shunge/arrow` | Arrow 数据结构、IPC Stream/File、互操作 | 使用其 RecordBatch；新增发布判定、隔离、诊断和脱敏 |
-| MoonFrame | DataFrame、表达式、查询、分组、连接和惰性执行 | 不做查询；处理数据质量和发布处置 |
-| `moon-data-contract` | Schema 治理、演进、兼容性、迁移和发布规则 | 不管理 Schema 版本；检查实际批次内容并拆分行 |
-| `moonbit-jsonschema` | 按 JSON Schema 验证 JSON | 不解析 JSON Schema；直接处理 Arrow 列 |
-| MoonJQ | JSON 查询语言和解释执行 | 不提供查询语言；诊断和输出均为 Arrow 原生结构 |
+| 业务目标 | 数据契约与数据质量校验 | 目的限制、同意和去识别后的隐私发布 |
+| 输入 | CSV/JSONL + JSON contract | Arrow RecordBatch + PrivacyPolicy + ReleaseRequest |
+| 决策依据 | schema、完整性、范围、枚举、唯一性等 | purpose、recipient、consent、k-anonymity、column treatment |
+| 附加能力 | profile、quality score、contract diff、CLI | 默认拒绝投影、敏感字段处置、发布 manifest |
+| 输出 | 文本/JSON 校验报告 | 四个 Arrow RecordBatch |
+| 主 API | Contract、Rule、ValidationReport | PrivacyPolicy、ReleaseRequest、PrivacyReport |
 
-初版 MoonQuery 曾实现过滤、排序、分组、连接和逻辑计划。核查 MoonFrame 后确认该方向重合度过高，因此当前代码树已移除整个查询包，转为独立的运行时发布门禁。该调整保留在 Git 历史中，便于审查。
+当前源码已删除 `RequiredColumn`、`NotNull`、数值范围、允许列表、唯一性、跨字段顺序、
+Warning/Error 等通用质量 API，也不包含 CSV/JSONL 解析、数据画像、质量评分或合同 diff。
+两项目可以串联：先用 MoonVerity 检查质量，再用 MoonSentinel 决定能否出域。
 
-## 八 创新和应用特点
+## 九、创新点
 
-1. 门禁直接接收和返回 Arrow RecordBatch，获准数据、隔离数据和诊断数据使用同一种交换格式。
-2. 质量判定与处置合并在一次调用中，调用方无需再次根据错误列表手工筛行。
-3. 诊断收集有明确上限，但统计不丢失，避免异常批次产生无界内存开销。
-4. 脱敏只作用于获准数据，既防止敏感数据进入下游，也保留隔离数据的排错价值。
-5. 数据集级错误和行级错误使用同一报告模型，可统一存档和展示。
+1. 将用途和接收方作为运行时发布请求，而不是数据合同的静态描述；
+2. 在同一决策中组合行级同意与集合级 k-匿名，两者任一不满足都不会泄露行；
+3. 列策略默认拒绝，新增输入列不会因调用方忘记配置而自动流向下游；
+4. 在构造策略时禁止直接标识符和敏感列原样发布，错误更早暴露；
+5. 发布数据、隔离数据、拒绝原因和审计清单都使用 Arrow，可直接进入 IPC 或 Wasm；
+6. 诊断内容不记录原始准标识符值，避免错误报告成为新的敏感信息副本。
 
-## 九 原创和依赖边界
+## 十、原创与依赖边界
 
-本仓库实现合同校验、规则执行、严重度语义、诊断上限、行隔离、脱敏策略、Arrow 诊断输出、测试和演示。Arrow Schema、Column、RecordBatch 以及 IPC 编解码来自公开依赖 `shunge/arrow`，不作为本项目原创成果申报。
+本仓库原创实现隐私政策模型、发布请求、用途/接收方授权、同意检查、k-匿名等价类、
+失败关闭策略、列级最小化、隐私 findings、release manifest、测试和演示。
 
-当前生产代码仅位于 `src/gate`，没有 DataFrame、查询计划、IPC、FlatBuffers、位图、JSON Schema 或 Schema 迁移实现。旧版探索代码只存在于 Git 历史，不属于当前交付物。
+Arrow Schema、Column、RecordBatch 和 IPC 来自 `shunge/arrow`，不作为原创成果申报。
+MoonVerity 仅用于功能边界对比，没有复制其源码、数据合同、规则模型或 CLI。
 
-## 十 当前限制
+## 十一、当前限制
 
-- 规则面向单个 RecordBatch，尚未提供跨批次唯一性和时间窗口状态。
-- `Utf8Unique` 使用确定性双循环，适合 MVP 和中小批次，尚未进行哈希优化。
-- 字符串规则尚未提供正则表达式和长度范围。
-- 脱敏目前是固定字符串替换，尚未提供哈希、部分保留或外部密钥服务。
-- 输入输出格式仍由 `shunge/arrow@0.1.0` 的类型和 IPC 支持范围决定。
+- k-匿名只在单个 RecordBatch 内计算，尚未支持跨批次状态；
+- 当前未实现 l-diversity、t-closeness 或差分隐私；
+- UTF-8 固定替换不是密码学匿名化；
+- quarantine 仍含源数据，必须由调用方存入受控区域；
+- 技术门禁不替代法律意见、数据保护影响评估或组织审批。
 
-## 十一 后续路线
+## 十二、后续路线
 
-1. 增加字符串长度、模式、数值集合和条件规则。
-2. 为唯一性规则增加确定性哈希索引，并建立不同批次规模的基准。
-3. 增加电子邮件、手机号等可组合脱敏策略，同时避免在诊断文本中泄露原值。
-4. 支持多批次审计汇总和可配置的失败阈值。
-5. 构建浏览器演示界面，展示获准、隔离和诊断三个 Arrow 输出。
+1. 增加 l-diversity，约束等价类内敏感属性分布；
+2. 增加政策有效期和用途撤销记录；
+3. 增加不可逆哈希/令牌化适配接口，不在库内托管密钥；
+4. 支持多批次 k-匿名状态和隐私回归测试；
+5. 构建浏览器演示，展示请求、决策、最小化结果和发布清单。
 
-## 十二 验收标准
+## 十三、验收标准
 
-1. `moon fmt --check` 通过。
-2. `moon check --target all --deny-warn` 无错误和警告。
-3. `moon test --target all --deny-warn` 在四个目标上全部通过。
-4. 演示能生成 approved、quarantine 和 findings，并显示准确计数。
-5. approved 的敏感字段已替换，quarantine 保持原始值。
-6. findings 可写入 Arrow IPC 并重新读取。
-7. 当前生产代码不包含 DataFrame、查询引擎或 Arrow IPC 的重复实现。
-8. README、申报书、差异化说明和代码行为一致。
+1. `moon fmt --check` 通过；
+2. `moon check --target all --deny-warn` 通过；
+3. `moon test --target all --deny-warn` 在四个目标上全部通过；
+4. 未授权用途或接收方触发整批拒绝；
+5. 未同意行和小于 k 的等价类被隔离；
+6. approved 不包含直接标识符和同意字段，敏感邮件已替换；
+7. manifest 记录 request id、policy、purpose、recipient、decision、行数、k 和发布列；
+8. findings 与 manifest 均可写入 Arrow IPC 并回读；
+9. 当前公开 API 不含 MoonVerity 同类的通用质量规则、画像或合同 diff。
