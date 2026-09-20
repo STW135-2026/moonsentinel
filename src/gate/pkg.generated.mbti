@@ -16,11 +16,17 @@ pub(all) struct ColumnPolicy {
   classification : DataClass
   treatment : Treatment
 } derive(Eq, @debug.Debug)
+pub fn ColumnPolicy::equal(Self, Self) -> Bool
+pub fn ColumnPolicy::not_equal(Self, Self) -> Bool
+pub fn ColumnPolicy::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ConsentRequirement {
   column : String
   granted_values : Array[String]
 } derive(Eq, @debug.Debug)
+pub fn ConsentRequirement::equal(Self, Self) -> Bool
+pub fn ConsentRequirement::not_equal(Self, Self) -> Bool
+pub fn ConsentRequirement::to_repr(Self) -> @debug.Repr
 
 pub(all) enum DataClass {
   PublicData
@@ -28,6 +34,9 @@ pub(all) enum DataClass {
   Sensitive
   DirectIdentifier
 } derive(Eq, @debug.Debug)
+pub fn DataClass::equal(Self, Self) -> Bool
+pub fn DataClass::not_equal(Self, Self) -> Bool
+pub fn DataClass::to_repr(Self) -> @debug.Repr
 
 pub(all) struct Finding {
   request_id : String
@@ -36,6 +45,9 @@ pub(all) struct Finding {
   column : String?
   message : String
 } derive(Eq, @debug.Debug)
+pub fn Finding::equal(Self, Self) -> Bool
+pub fn Finding::not_equal(Self, Self) -> Bool
+pub fn Finding::to_repr(Self) -> @debug.Repr
 
 pub(all) enum FindingCode {
   PurposeNotAllowed
@@ -46,12 +58,18 @@ pub(all) enum FindingCode {
   ConsentDenied
   KAnonymityViolation
 } derive(Eq, @debug.Debug)
+pub fn FindingCode::equal(Self, Self) -> Bool
+pub fn FindingCode::not_equal(Self, Self) -> Bool
+pub fn FindingCode::to_repr(Self) -> @debug.Repr
 
 pub(all) enum GateError {
   InvalidPolicy(String)
   InvalidRequest(String)
   InvalidBatch
 } derive(Eq, @debug.Debug)
+pub fn GateError::equal(Self, Self) -> Bool
+pub fn GateError::not_equal(Self, Self) -> Bool
+pub fn GateError::to_repr(Self) -> @debug.Repr
 
 pub struct PrivacyPolicy {
   name : String
@@ -95,6 +113,9 @@ pub(all) enum Recipient {
   Partner
   Public
 } derive(Eq, @debug.Debug)
+pub fn Recipient::equal(Self, Self) -> Bool
+pub fn Recipient::not_equal(Self, Self) -> Bool
+pub fn Recipient::to_repr(Self) -> @debug.Repr
 
 pub struct ReleaseBundle {
   report_value : PrivacyReport
@@ -114,13 +135,19 @@ pub(all) struct ReleaseRequest {
   purpose : String
   recipient : Recipient
 } derive(Eq, @debug.Debug)
+pub fn ReleaseRequest::equal(Self, Self) -> Bool
 pub fn ReleaseRequest::new(String, String, Recipient) -> Result[Self, GateError]
+pub fn ReleaseRequest::not_equal(Self, Self) -> Bool
+pub fn ReleaseRequest::to_repr(Self) -> @debug.Repr
 
 pub(all) enum Treatment {
   Keep
   ReplaceUtf8(String)
   Drop
 } derive(Eq, @debug.Debug)
+pub fn Treatment::equal(Self, Self) -> Bool
+pub fn Treatment::not_equal(Self, Self) -> Bool
+pub fn Treatment::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

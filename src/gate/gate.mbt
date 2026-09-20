@@ -80,6 +80,63 @@ pub(all) struct Finding {
 } derive(Eq, Debug)
 
 ///|
+/// Export only the derived methods that callers are expected to use. Newer
+/// MoonBit toolchains require this declaration instead of implicitly
+/// promoting implementation methods into the public API.
+pub extend GateError with Eq::{not_equal, equal}
+
+///|
+pub extend GateError with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend Recipient with Eq::{not_equal, equal}
+
+///|
+pub extend Recipient with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend DataClass with Eq::{not_equal, equal}
+
+///|
+pub extend DataClass with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend Treatment with Eq::{not_equal, equal}
+
+///|
+pub extend Treatment with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend ColumnPolicy with Eq::{not_equal, equal}
+
+///|
+pub extend ColumnPolicy with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend ConsentRequirement with Eq::{not_equal, equal}
+
+///|
+pub extend ConsentRequirement with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend ReleaseRequest with Eq::{not_equal, equal}
+
+///|
+pub extend ReleaseRequest with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend FindingCode with Eq::{not_equal, equal}
+
+///|
+pub extend FindingCode with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend Finding with Eq::{not_equal, equal}
+
+///|
+pub extend Finding with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
 /// A purpose-bound privacy release policy.
 pub struct PrivacyPolicy {
   name : String
