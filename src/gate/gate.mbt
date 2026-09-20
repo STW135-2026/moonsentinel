@@ -1,98 +1,171 @@
 ///|
-/// Errors raised when a contract, Arrow batch, or release policy is invalid.
+/// Errors raised when a privacy policy, release request, or Arrow batch is
+/// invalid. Runtime denials are returned as findings inside a ReleaseBundle.
 pub(all) enum GateError {
-  InvalidContract(String)
+  InvalidPolicy(String)
+  InvalidRequest(String)
   InvalidBatch
-  InvalidRedaction(String)
 } derive(Eq, Debug)
 
 ///|
-/// Rule severity controls whether a finding quarantines a row.
-pub(all) enum Severity {
-  Warning
-  Error
+/// Trust boundary of the system that will receive the released data.
+pub(all) enum Recipient {
+  Internal
+  Partner
+  Public
 } derive(Eq, Debug)
 
 ///|
-/// Stable machine-readable finding codes.
+/// Privacy classification used to validate release treatments.
+pub(all) enum DataClass {
+  PublicData
+  QuasiIdentifier
+  Sensitive
+  DirectIdentifier
+} derive(Eq, Debug)
+
+///|
+/// Output treatment for one input column. Columns absent from the policy are
+/// denied by default and never appear in the released RecordBatch.
+pub(all) enum Treatment {
+  Keep
+  ReplaceUtf8(String)
+  Drop
+} derive(Eq, Debug)
+
+///|
+/// Classification and output treatment for one input column.
+pub(all) struct ColumnPolicy {
+  column : String
+  classification : DataClass
+  treatment : Treatment
+} derive(Eq, Debug)
+
+///|
+/// Per-row consent requirement for the requested release purpose.
+pub(all) struct ConsentRequirement {
+  column : String
+  granted_values : Array[String]
+} derive(Eq, Debug)
+
+///|
+/// One release attempt. Request identifiers are copied into findings and the
+/// release manifest to make the decision traceable.
+pub(all) struct ReleaseRequest {
+  request_id : String
+  purpose : String
+  recipient : Recipient
+} derive(Eq, Debug)
+
+///|
+/// Stable machine-readable denial reasons.
 pub(all) enum FindingCode {
+  PurposeNotAllowed
+  RecipientNotAllowed
   MissingColumn
   TypeMismatch
-  NullValue
-  OutOfRange
-  EmptyValue
-  NotAllowed
-  DuplicateValue
-  CrossFieldOrder
+  ConsentMissing
+  ConsentDenied
+  KAnonymityViolation
 } derive(Eq, Debug)
 
 ///|
-/// One data-quality finding. `row=None` denotes a dataset-level finding.
+/// One privacy denial. `row=None` denotes a release-wide denial.
 pub(all) struct Finding {
-  rule_id : String
-  severity : Severity
+  request_id : String
+  code : FindingCode
   row : Int?
   column : String?
-  code : FindingCode
   message : String
 } derive(Eq, Debug)
 
 ///|
-/// Declarative checks supported by MoonSentinel's first release.
-pub(all) enum Rule {
-  RequiredColumn(String, String, @arrow.DataType, Severity)
-  NotNull(String, String, Severity)
-  Int32Range(String, String, Int?, Int?, Severity)
-  Int64Range(String, String, Int64?, Int64?, Severity)
-  Utf8NonEmpty(String, String, Severity)
-  Utf8Allowed(String, String, Array[String], Severity)
-  Utf8Unique(String, String, Severity)
-  Int32LessOrEqual(String, String, String, Severity)
-} derive(Debug)
-
-///|
-/// A release-time data contract. Rules run in declaration order and rows are
-/// inspected in source order so reports are reproducible.
-pub struct Contract {
+/// A purpose-bound privacy release policy.
+pub struct PrivacyPolicy {
   name : String
-  rules : Array[Rule]
+  allowed_purposes : Array[String]
+  allowed_recipients : Array[Recipient]
+  consent : ConsentRequirement
+  columns : Array[ColumnPolicy]
+  minimum_group_size : Int
   max_findings : Int
 }
 
 ///|
-/// A privacy transformation applied only to rows approved for release.
-pub(all) enum Redaction {
-  ReplaceUtf8(String, String)
-} derive(Eq, Debug)
-
-///|
-/// Result of an audit. Counts include findings omitted by `max_findings`.
-pub struct AuditReport {
-  contract_name : String
+/// Auditable result of one release attempt.
+pub struct PrivacyReport {
+  policy_name : String
+  request_value : ReleaseRequest
   source_rows : Int
-  error_count_value : Int
-  warning_count_value : Int
+  denial_count_value : Int
   findings_value : Array[Finding]
   truncated_value : Bool
-  accepted_indices : Array[Int]
-  rejected_indices : Array[Int]
+  approved_indices : Array[Int]
+  quarantined_indices : Array[Int]
+  released_columns_value : Array[String]
+  minimum_group_size_value : Int
 }
 
 ///|
-/// Release output: safe rows, quarantined rows, and Arrow-native diagnostics.
+/// Fail-closed outputs of a privacy release attempt.
 pub struct ReleaseBundle {
-  report_value : AuditReport
+  report_value : PrivacyReport
   approved_value : @arrow.RecordBatch
   quarantine_value : @arrow.RecordBatch
   findings_value : @arrow.RecordBatch
+  manifest_value : @arrow.RecordBatch
 }
 
 ///|
-priv struct AuditState {
+priv struct ReleaseState {
   findings : Array[Finding]
   counts : Array[Int]
   rejected : Array[Bool]
+  dataset_denied : Array[Bool]
   max_findings : Int
+  request_id : String
+}
+
+///|
+fn contains_string(values : Array[String], target : String) -> Bool {
+  for value in values {
+    if value == target {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn contains_recipient(values : Array[Recipient], target : Recipient) -> Bool {
+  for value in values {
+    if value == target {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn recipient_text(recipient : Recipient) -> String {
+  match recipient {
+    Internal => "internal"
+    Partner => "partner"
+    Public => "public"
+  }
+}
+
+///|
+fn finding_code_text(code : FindingCode) -> String {
+  match code {
+    PurposeNotAllowed => "purpose_not_allowed"
+    RecipientNotAllowed => "recipient_not_allowed"
+    MissingColumn => "missing_column"
+    TypeMismatch => "type_mismatch"
+    ConsentMissing => "consent_missing"
+    ConsentDenied => "consent_denied"
+    KAnonymityViolation => "k_anonymity_violation"
+  }
 }
 
 ///|
@@ -109,157 +182,171 @@ fn data_type_name(data_type : @arrow.DataType) -> String {
 }
 
 ///|
-fn severity_text(severity : Severity) -> String {
-  match severity {
-    Warning => "warning"
-    Error => "error"
+fn copy_column_policy(policy : ColumnPolicy) -> ColumnPolicy {
+  let treatment = match policy.treatment {
+    Keep => Keep
+    ReplaceUtf8(value) => ReplaceUtf8(value)
+    Drop => Drop
   }
+  { column: policy.column, classification: policy.classification, treatment, }
 }
 
 ///|
-fn finding_code_text(code : FindingCode) -> String {
-  match code {
-    MissingColumn => "missing_column"
-    TypeMismatch => "type_mismatch"
-    NullValue => "null_value"
-    OutOfRange => "out_of_range"
-    EmptyValue => "empty_value"
-    NotAllowed => "not_allowed"
-    DuplicateValue => "duplicate_value"
-    CrossFieldOrder => "cross_field_order"
+fn validate_unique_strings(label : String, values : Array[String]) -> String? {
+  if values.is_empty() {
+    return Some(label + " must not be empty")
   }
-}
-
-///|
-fn rule_id(rule : Rule) -> String {
-  match rule {
-    RequiredColumn(id, _, _, _) => id
-    NotNull(id, _, _) => id
-    Int32Range(id, _, _, _, _) => id
-    Int64Range(id, _, _, _, _) => id
-    Utf8NonEmpty(id, _, _) => id
-    Utf8Allowed(id, _, _, _) => id
-    Utf8Unique(id, _, _) => id
-    Int32LessOrEqual(id, _, _, _) => id
-  }
-}
-
-///|
-fn copy_rule(rule : Rule) -> Rule {
-  match rule {
-    RequiredColumn(id, column, data_type, severity) =>
-      RequiredColumn(id, column, data_type, severity)
-    NotNull(id, column, severity) => NotNull(id, column, severity)
-    Int32Range(id, column, minimum, maximum, severity) =>
-      Int32Range(id, column, minimum, maximum, severity)
-    Int64Range(id, column, minimum, maximum, severity) =>
-      Int64Range(id, column, minimum, maximum, severity)
-    Utf8NonEmpty(id, column, severity) => Utf8NonEmpty(id, column, severity)
-    Utf8Allowed(id, column, allowed, severity) =>
-      Utf8Allowed(id, column, allowed.copy(), severity)
-    Utf8Unique(id, column, severity) => Utf8Unique(id, column, severity)
-    Int32LessOrEqual(id, left, right, severity) =>
-      Int32LessOrEqual(id, left, right, severity)
-  }
-}
-
-///|
-fn invalid_rule(rule : Rule) -> String? {
-  let id = rule_id(rule)
-  if id == "" {
-    return Some("rule id must not be empty")
-  }
-  match rule {
-    RequiredColumn(_, column, _, _)
-    | NotNull(_, column, _)
-    | Utf8NonEmpty(_, column, _)
-    | Utf8Unique(_, column, _) =>
-      if column == "" {
-        Some("column name must not be empty")
-      } else {
-        None
-      }
-    Int32Range(_, column, minimum, maximum, _) => {
-      if column == "" {
-        return Some("column name must not be empty")
-      }
-      match (minimum, maximum) {
-        (Some(low), Some(high)) if low > high =>
-          Some("int32 range minimum exceeds maximum")
-        _ => None
-      }
-    }
-    Int64Range(_, column, minimum, maximum, _) => {
-      if column == "" {
-        return Some("column name must not be empty")
-      }
-      match (minimum, maximum) {
-        (Some(low), Some(high)) if low > high =>
-          Some("int64 range minimum exceeds maximum")
-        _ => None
-      }
-    }
-    Utf8Allowed(_, column, allowed, _) => {
-      if column == "" {
-        return Some("column name must not be empty")
-      }
-      if allowed.is_empty() {
-        return Some("allowed value list must not be empty")
-      }
-      for index in 0..<allowed.length() {
-        for previous in 0..<index {
-          if allowed[index] == allowed[previous] {
-            return Some("allowed value list contains duplicates")
-          }
-        }
-      }
-      None
-    }
-    Int32LessOrEqual(_, left, right, _) =>
-      if left == "" || right == "" {
-        Some("cross-field rule columns must not be empty")
-      } else if left == right {
-        Some("cross-field rule columns must differ")
-      } else {
-        None
-      }
-  }
-}
-
-///|
-pub fn Contract::new(
-  name : String,
-  rules : Array[Rule],
-  max_findings? : Int = 100,
-) -> Result[Contract, GateError] {
-  if name == "" {
-    return Err(InvalidContract("contract name must not be empty"))
-  }
-  if rules.is_empty() {
-    return Err(InvalidContract("contract must contain at least one rule"))
-  }
-  if max_findings < 1 {
-    return Err(InvalidContract("max_findings must be positive"))
-  }
-  for index in 0..<rules.length() {
-    match invalid_rule(rules[index]) {
-      Some(message) => return Err(InvalidContract(message))
-      None => ()
+  for index in 0..<values.length() {
+    if values[index] == "" {
+      return Some(label + " must not contain an empty value")
     }
     for previous in 0..<index {
-      if rule_id(rules[index]) == rule_id(rules[previous]) {
-        return Err(
-          InvalidContract("duplicate rule id: " + rule_id(rules[index])),
-        )
+      if values[index] == values[previous] {
+        return Some(label + " contains a duplicate value: " + values[index])
       }
     }
   }
-  Ok({ name, rules: rules.map(rule => copy_rule(rule)), max_findings, })
+  None
 }
 
 ///|
-pub fn Contract::name(self : Contract) -> String {
+fn validate_policy_columns(columns : Array[ColumnPolicy]) -> String? {
+  if columns.is_empty() {
+    return Some("column policy must not be empty")
+  }
+  let mut released = 0
+  let mut quasi_identifiers = 0
+  for index in 0..<columns.length() {
+    let policy = columns[index]
+    if policy.column == "" {
+      return Some("column name must not be empty")
+    }
+    for previous in 0..<index {
+      if policy.column == columns[previous].column {
+        return Some("duplicate column policy: " + policy.column)
+      }
+    }
+    match policy.treatment {
+      Keep => released += 1
+      ReplaceUtf8(replacement) => {
+        if replacement == "" {
+          return Some("replacement must not be empty: " + policy.column)
+        }
+        released += 1
+      }
+      Drop => ()
+    }
+    match policy.classification {
+      DirectIdentifier | Sensitive =>
+        if policy.treatment is Keep {
+          return Some(
+            "direct or sensitive column must be masked or dropped: " +
+            policy.column,
+          )
+        }
+      QuasiIdentifier => {
+        if !(policy.treatment is Keep) {
+          return Some(
+            "quasi-identifier must be kept for k-anonymity verification: " +
+            policy.column,
+          )
+        }
+        quasi_identifiers += 1
+      }
+      PublicData => ()
+    }
+  }
+  if released == 0 {
+    return Some("policy must release at least one column")
+  }
+  if quasi_identifiers == 0 {
+    return Some("policy must declare at least one quasi-identifier")
+  }
+  None
+}
+
+///|
+pub fn PrivacyPolicy::new(
+  name : String,
+  allowed_purposes : Array[String],
+  allowed_recipients : Array[Recipient],
+  consent : ConsentRequirement,
+  columns : Array[ColumnPolicy],
+  minimum_group_size? : Int = 2,
+  max_findings? : Int = 100,
+) -> Result[PrivacyPolicy, GateError] {
+  if name == "" {
+    return Err(InvalidPolicy("policy name must not be empty"))
+  }
+  match validate_unique_strings("allowed purposes", allowed_purposes) {
+    Some(message) => return Err(InvalidPolicy(message))
+    None => ()
+  }
+  if allowed_recipients.is_empty() {
+    return Err(InvalidPolicy("allowed recipients must not be empty"))
+  }
+  for index in 0..<allowed_recipients.length() {
+    for previous in 0..<index {
+      if allowed_recipients[index] == allowed_recipients[previous] {
+        return Err(InvalidPolicy("allowed recipients contain duplicates"))
+      }
+    }
+  }
+  if consent.column == "" {
+    return Err(InvalidPolicy("consent column must not be empty"))
+  }
+  match
+    validate_unique_strings("consent granted values", consent.granted_values) {
+    Some(message) => return Err(InvalidPolicy(message))
+    None => ()
+  }
+  match validate_policy_columns(columns) {
+    Some(message) => return Err(InvalidPolicy(message))
+    None => ()
+  }
+  if minimum_group_size < 2 {
+    return Err(InvalidPolicy("minimum_group_size must be at least 2"))
+  }
+  if max_findings < 1 {
+    return Err(InvalidPolicy("max_findings must be positive"))
+  }
+  Ok({
+    name,
+    allowed_purposes: allowed_purposes.copy(),
+    allowed_recipients: allowed_recipients.copy(),
+    consent: {
+      column: consent.column,
+      granted_values: consent.granted_values.copy(),
+    },
+    columns: columns.map(column => copy_column_policy(column)),
+    minimum_group_size,
+    max_findings,
+  })
+}
+
+///|
+pub fn PrivacyPolicy::name(self : PrivacyPolicy) -> String {
   self.name
+}
+
+///|
+pub fn PrivacyPolicy::minimum_group_size(self : PrivacyPolicy) -> Int {
+  self.minimum_group_size
+}
+
+///|
+pub fn ReleaseRequest::new(
+  request_id : String,
+  purpose : String,
+  recipient : Recipient,
+) -> Result[ReleaseRequest, GateError] {
+  if request_id == "" {
+    return Err(InvalidRequest("request id must not be empty"))
+  }
+  if purpose == "" {
+    return Err(InvalidRequest("purpose must not be empty"))
+  }
+  Ok({ request_id, purpose, recipient, })
 }
 
 ///|
@@ -273,19 +360,16 @@ fn field_index(schema : @arrow.Schema, name : String) -> Int? {
 }
 
 ///|
-fn record_finding(state : AuditState, finding : Finding) -> Unit {
-  match finding.severity {
-    Error => {
-      state.counts[0] = state.counts[0] + 1
-      match finding.row {
-        Some(row) => state.rejected[row] = true
-        None =>
-          for row in 0..<state.rejected.length() {
-            state.rejected[row] = true
-          }
+fn record_finding(state : ReleaseState, finding : Finding) -> Unit {
+  state.counts[0] = state.counts[0] + 1
+  match finding.row {
+    Some(row) => state.rejected[row] = true
+    None => {
+      state.dataset_denied[0] = true
+      for row in 0..<state.rejected.length() {
+        state.rejected[row] = true
       }
     }
-    Warning => state.counts[1] = state.counts[1] + 1
   }
   if state.findings.length() < state.max_findings {
     state.findings.push(finding)
@@ -293,324 +377,36 @@ fn record_finding(state : AuditState, finding : Finding) -> Unit {
 }
 
 ///|
-fn resolve_column(
-  batch : @arrow.RecordBatch,
-  state : AuditState,
-  id : String,
-  severity : Severity,
-  column : String,
-  expected : @arrow.DataType?,
-) -> Int? {
-  guard field_index(batch.schema, column) is Some(index) else {
-    record_finding(state, {
-      rule_id: id,
-      severity,
-      row: None,
-      column: Some(column),
-      code: MissingColumn,
-      message: "required column '" + column + "' is missing",
-    })
-    return None
-  }
-  match expected {
-    Some(data_type) if batch.columns[index].data_type() != data_type => {
-      record_finding(state, {
-        rule_id: id,
-        severity,
-        row: None,
-        column: Some(column),
-        code: TypeMismatch,
-        message: "column '" +
-        column +
-        "' expected " +
-        data_type_name(data_type) +
-        " but found " +
-        data_type_name(batch.columns[index].data_type()),
-      })
-      None
-    }
-    _ => Some(index)
-  }
-}
-
-///|
-fn column_has_value(column : @arrow.Column, row : Int) -> Bool {
-  match column {
-    @arrow.Nulls(_) => false
-    @arrow.Booleans(values) => values[row] is Some(_)
-    @arrow.Int32s(values) => values[row] is Some(_)
-    @arrow.Int64s(values) => values[row] is Some(_)
-    @arrow.Float64s(values) => values[row] is Some(_)
-    @arrow.Strings(values) => values[row] is Some(_)
-    @arrow.Binaries(values) => values[row] is Some(_)
-  }
-}
-
-///|
-fn row_finding(
-  state : AuditState,
-  id : String,
-  severity : Severity,
-  row : Int,
-  column : String,
+fn dataset_finding(
+  state : ReleaseState,
   code : FindingCode,
+  column : String?,
   message : String,
 ) -> Unit {
   record_finding(state, {
-    rule_id: id,
-    severity,
-    row: Some(row),
-    column: Some(column),
+    request_id: state.request_id,
     code,
+    row: None,
+    column,
     message,
   })
 }
 
 ///|
-fn value_is_allowed(value : String, allowed : Array[String]) -> Bool {
-  for candidate in allowed {
-    if value == candidate {
-      return true
-    }
-  }
-  false
-}
-
-///|
-fn apply_rule(
-  batch : @arrow.RecordBatch,
-  state : AuditState,
-  rule : Rule,
+fn row_finding(
+  state : ReleaseState,
+  code : FindingCode,
+  row : Int,
+  column : String?,
+  message : String,
 ) -> Unit {
-  match rule {
-    RequiredColumn(id, column, expected, severity) =>
-      ignore(resolve_column(batch, state, id, severity, column, Some(expected)))
-    NotNull(id, column, severity) =>
-      match resolve_column(batch, state, id, severity, column, None) {
-        None => ()
-        Some(index) =>
-          for row in 0..<batch.num_rows {
-            if !column_has_value(batch.columns[index], row) {
-              row_finding(
-                state,
-                id,
-                severity,
-                row,
-                column,
-                NullValue,
-                "column '" + column + "' is null",
-              )
-            }
-          }
-      }
-    Int32Range(id, column, minimum, maximum, severity) =>
-      match
-        resolve_column(batch, state, id, severity, column, Some(@arrow.Int32)) {
-        None => ()
-        Some(index) =>
-          match batch.columns[index] {
-            @arrow.Int32s(values) =>
-              for row in 0..<values.length() {
-                match values[row] {
-                  None => ()
-                  Some(value) => {
-                    let below = match minimum {
-                      Some(low) => value < low
-                      None => false
-                    }
-                    let above = match maximum {
-                      Some(high) => value > high
-                      None => false
-                    }
-                    if below || above {
-                      row_finding(
-                        state,
-                        id,
-                        severity,
-                        row,
-                        column,
-                        OutOfRange,
-                        "column '" +
-                        column +
-                        "' is outside the configured int32 range",
-                      )
-                    }
-                  }
-                }
-              }
-            _ => ()
-          }
-      }
-    Int64Range(id, column, minimum, maximum, severity) =>
-      match
-        resolve_column(batch, state, id, severity, column, Some(@arrow.Int64)) {
-        None => ()
-        Some(index) =>
-          match batch.columns[index] {
-            @arrow.Int64s(values) =>
-              for row in 0..<values.length() {
-                match values[row] {
-                  None => ()
-                  Some(value) => {
-                    let below = match minimum {
-                      Some(low) => value < low
-                      None => false
-                    }
-                    let above = match maximum {
-                      Some(high) => value > high
-                      None => false
-                    }
-                    if below || above {
-                      row_finding(
-                        state,
-                        id,
-                        severity,
-                        row,
-                        column,
-                        OutOfRange,
-                        "column '" +
-                        column +
-                        "' is outside the configured int64 range",
-                      )
-                    }
-                  }
-                }
-              }
-            _ => ()
-          }
-      }
-    Utf8NonEmpty(id, column, severity) =>
-      match
-        resolve_column(batch, state, id, severity, column, Some(@arrow.Utf8)) {
-        None => ()
-        Some(index) =>
-          match batch.columns[index] {
-            @arrow.Strings(values) =>
-              for row in 0..<values.length() {
-                if values[row] == Some("") {
-                  row_finding(
-                    state,
-                    id,
-                    severity,
-                    row,
-                    column,
-                    EmptyValue,
-                    "column '" + column + "' is empty",
-                  )
-                }
-              }
-            _ => ()
-          }
-      }
-    Utf8Allowed(id, column, allowed, severity) =>
-      match
-        resolve_column(batch, state, id, severity, column, Some(@arrow.Utf8)) {
-        None => ()
-        Some(index) =>
-          match batch.columns[index] {
-            @arrow.Strings(values) =>
-              for row in 0..<values.length() {
-                match values[row] {
-                  Some(value) if !value_is_allowed(value, allowed) =>
-                    row_finding(
-                      state,
-                      id,
-                      severity,
-                      row,
-                      column,
-                      NotAllowed,
-                      "column '" +
-                      column +
-                      "' contains a value outside the allowlist",
-                    )
-                  _ => ()
-                }
-              }
-            _ => ()
-          }
-      }
-    Utf8Unique(id, column, severity) =>
-      match
-        resolve_column(batch, state, id, severity, column, Some(@arrow.Utf8)) {
-        None => ()
-        Some(index) =>
-          match batch.columns[index] {
-            @arrow.Strings(values) =>
-              for row in 0..<values.length() {
-                match values[row] {
-                  None => ()
-                  Some(value) => {
-                    let mut duplicated = false
-                    for other in 0..<values.length() {
-                      if other != row && values[other] == Some(value) {
-                        duplicated = true
-                        break
-                      }
-                    }
-                    if duplicated {
-                      row_finding(
-                        state,
-                        id,
-                        severity,
-                        row,
-                        column,
-                        DuplicateValue,
-                        "column '" + column + "' contains a duplicate value",
-                      )
-                    }
-                  }
-                }
-              }
-            _ => ()
-          }
-      }
-    Int32LessOrEqual(id, left, right, severity) => {
-      let left_index = resolve_column(
-        batch,
-        state,
-        id,
-        severity,
-        left,
-        Some(@arrow.Int32),
-      )
-      let right_index = resolve_column(
-        batch,
-        state,
-        id,
-        severity,
-        right,
-        Some(@arrow.Int32),
-      )
-      match (left_index, right_index) {
-        (Some(a), Some(b)) =>
-          match (batch.columns[a], batch.columns[b]) {
-            (@arrow.Int32s(left_values), @arrow.Int32s(right_values)) =>
-              for row in 0..<batch.num_rows {
-                match (left_values[row], right_values[row]) {
-                  (Some(left_value), Some(right_value)) if left_value >
-                    right_value =>
-                    row_finding(
-                      state,
-                      id,
-                      severity,
-                      row,
-                      left + "," + right,
-                      CrossFieldOrder,
-                      "column '" +
-                      left +
-                      "' must be less than or equal to '" +
-                      right +
-                      "'",
-                    )
-                  _ => ()
-                }
-              }
-            _ => ()
-          }
-        _ => ()
-      }
-    }
-  }
+  record_finding(state, {
+    request_id: state.request_id,
+    code,
+    row: Some(row),
+    column,
+    message,
+  })
 }
 
 ///|
@@ -662,105 +458,494 @@ fn take_batch(
 }
 
 ///|
-pub fn Contract::audit(
-  self : Contract,
+fn consent_is_granted(value : String, granted_values : Array[String]) -> Bool {
+  contains_string(granted_values, value)
+}
+
+///|
+fn inspect_consent(
+  policy : PrivacyPolicy,
   batch : @arrow.RecordBatch,
-) -> Result[AuditReport, GateError] {
+  state : ReleaseState,
+) -> Unit {
+  guard field_index(batch.schema, policy.consent.column) is Some(index) else {
+    dataset_finding(
+      state,
+      MissingColumn,
+      Some(policy.consent.column),
+      "consent column is missing",
+    )
+    return
+  }
+  match batch.columns[index] {
+    @arrow.Strings(values) =>
+      for row in 0..<values.length() {
+        match values[row] {
+          None =>
+            row_finding(
+              state,
+              ConsentMissing,
+              row,
+              Some(policy.consent.column),
+              "release consent is missing",
+            )
+          Some(value) if !consent_is_granted(
+              value,
+              policy.consent.granted_values,
+            ) =>
+            row_finding(
+              state,
+              ConsentDenied,
+              row,
+              Some(policy.consent.column),
+              "release consent does not cover the requested purpose",
+            )
+          _ => ()
+        }
+      }
+    column =>
+      dataset_finding(
+        state,
+        TypeMismatch,
+        Some(policy.consent.column),
+        "consent column must be utf8, found " +
+        data_type_name(column.data_type()),
+      )
+  }
+}
+
+///|
+fn quasi_type_supported(column : @arrow.Column) -> Bool {
+  match column {
+    @arrow.Booleans(_)
+    | @arrow.Int32s(_)
+    | @arrow.Int64s(_)
+    | @arrow.Strings(_) => true
+    _ => false
+  }
+}
+
+///|
+fn inspect_policy_columns(
+  policy : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+  state : ReleaseState,
+) -> Unit {
+  for column_policy in policy.columns {
+    guard field_index(batch.schema, column_policy.column) is Some(index) else {
+      dataset_finding(
+        state,
+        MissingColumn,
+        Some(column_policy.column),
+        "policy column is missing",
+      )
+      continue
+    }
+    match column_policy.treatment {
+      ReplaceUtf8(_) if !(batch.columns[index] is @arrow.Strings(_)) =>
+        dataset_finding(
+          state,
+          TypeMismatch,
+          Some(column_policy.column),
+          "masked column must be utf8",
+        )
+      _ => ()
+    }
+    if column_policy.classification is QuasiIdentifier &&
+      !quasi_type_supported(batch.columns[index]) {
+      dataset_finding(
+        state,
+        TypeMismatch,
+        Some(column_policy.column),
+        "quasi-identifier must be bool, int32, int64, or utf8",
+      )
+    }
+  }
+}
+
+///|
+fn optional_string_key(value : String?) -> String {
+  match value {
+    None => "n"
+    Some(text) => "s" + text.length().to_string() + ":" + text
+  }
+}
+
+///|
+fn optional_int_key(value : Int?) -> String {
+  match value {
+    None => "n"
+    Some(number) => "i:" + number.to_string()
+  }
+}
+
+///|
+fn optional_int64_key(value : Int64?) -> String {
+  match value {
+    None => "n"
+    Some(number) => "l:" + number.to_string()
+  }
+}
+
+///|
+fn optional_bool_key(value : Bool?) -> String {
+  match value {
+    None => "n"
+    Some(true) => "b:1"
+    Some(false) => "b:0"
+  }
+}
+
+///|
+fn quasi_value_key(column : @arrow.Column, row : Int) -> String {
+  match column {
+    @arrow.Booleans(values) => optional_bool_key(values[row])
+    @arrow.Int32s(values) => optional_int_key(values[row])
+    @arrow.Int64s(values) => optional_int64_key(values[row])
+    @arrow.Strings(values) => optional_string_key(values[row])
+    _ => "unsupported"
+  }
+}
+
+///|
+fn quasi_indices(
+  policy : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+) -> Array[Int] {
+  let result : Array[Int] = []
+  for column_policy in policy.columns {
+    if column_policy.classification is QuasiIdentifier {
+      match field_index(batch.schema, column_policy.column) {
+        Some(index) => result.push(index)
+        None => ()
+      }
+    }
+  }
+  result
+}
+
+///|
+fn quasi_names(policy : PrivacyPolicy) -> Array[String] {
+  let result : Array[String] = []
+  for column_policy in policy.columns {
+    if column_policy.classification is QuasiIdentifier {
+      result.push(column_policy.column)
+    }
+  }
+  result
+}
+
+///|
+fn anonymity_key(
+  batch : @arrow.RecordBatch,
+  indices : Array[Int],
+  row : Int,
+) -> String {
+  indices.map(index => quasi_value_key(batch.columns[index], row)).join("|")
+}
+
+///|
+fn enforce_k_anonymity(
+  policy : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+  state : ReleaseState,
+) -> Unit {
+  if state.dataset_denied[0] {
+    return
+  }
+  let indices = quasi_indices(policy, batch)
+  let names = quasi_names(policy).join(",")
+  let eligible = state.rejected.map(value => !value)
+  let keys = Array::make(batch.num_rows, "")
+  for row in 0..<batch.num_rows {
+    if eligible[row] {
+      keys[row] = anonymity_key(batch, indices, row)
+    }
+  }
+  for row in 0..<batch.num_rows {
+    if eligible[row] {
+      let mut group_size = 0
+      for other in 0..<batch.num_rows {
+        if eligible[other] && keys[other] == keys[row] {
+          group_size += 1
+        }
+      }
+      if group_size < policy.minimum_group_size {
+        row_finding(
+          state,
+          KAnonymityViolation,
+          row,
+          Some(names),
+          "quasi-identifier group is smaller than the configured minimum",
+        )
+      }
+    }
+  }
+}
+
+///|
+fn released_column_names(policy : PrivacyPolicy) -> Array[String] {
+  let names : Array[String] = []
+  for column_policy in policy.columns {
+    if !(column_policy.treatment is Drop) {
+      names.push(column_policy.column)
+    }
+  }
+  names
+}
+
+///|
+fn empty_batch() -> Result[@arrow.RecordBatch, GateError] {
+  validated_batch(@arrow.Schema::new([]), [])
+}
+
+///|
+fn project_approved(
+  policy : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+  indices : Array[Int],
+) -> Result[@arrow.RecordBatch, GateError] {
+  let fields : Array[@arrow.Field] = []
+  let columns : Array[@arrow.Column] = []
+  for column_policy in policy.columns {
+    if !(column_policy.treatment is Drop) {
+      guard field_index(batch.schema, column_policy.column) is Some(index) else {
+        return Err(InvalidBatch)
+      }
+      fields.push(batch.schema.fields[index])
+      let selected = take_column(batch.columns[index], indices)
+      match column_policy.treatment {
+        Keep => columns.push(selected)
+        ReplaceUtf8(replacement) =>
+          match selected {
+            @arrow.Strings(values) =>
+              columns.push(
+                @arrow.Strings(values.map(value => value.map(_ => replacement))),
+              )
+            _ => return Err(InvalidBatch)
+          }
+        Drop => ()
+      }
+    }
+  }
+  validated_batch(@arrow.Schema::new(fields), columns)
+}
+
+///|
+fn findings_batch(
+  findings : Array[Finding],
+) -> Result[@arrow.RecordBatch, GateError] {
+  let schema = @arrow.Schema::new([
+    @arrow.Field::new("request_id", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("code", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("row", @arrow.Int32),
+    @arrow.Field::new("column", @arrow.Utf8),
+    @arrow.Field::new("message", @arrow.Utf8, nullable=false),
+  ])
+  validated_batch(schema, [
+    @arrow.Strings(findings.map(finding => Some(finding.request_id))),
+    @arrow.Strings(
+      findings.map(finding => Some(finding_code_text(finding.code))),
+    ),
+    @arrow.Int32s(findings.map(finding => finding.row)),
+    @arrow.Strings(findings.map(finding => finding.column)),
+    @arrow.Strings(findings.map(finding => Some(finding.message))),
+  ])
+}
+
+///|
+fn manifest_batch(
+  report : PrivacyReport,
+) -> Result[@arrow.RecordBatch, GateError] {
+  let schema = @arrow.Schema::new([
+    @arrow.Field::new("request_id", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("policy", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("purpose", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("recipient", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("decision", @arrow.Utf8, nullable=false),
+    @arrow.Field::new("source_rows", @arrow.Int32, nullable=false),
+    @arrow.Field::new("released_rows", @arrow.Int32, nullable=false),
+    @arrow.Field::new("quarantined_rows", @arrow.Int32, nullable=false),
+    @arrow.Field::new("minimum_group_size", @arrow.Int32, nullable=false),
+    @arrow.Field::new("released_columns", @arrow.Utf8, nullable=false),
+  ])
+  validated_batch(schema, [
+    @arrow.Strings([Some(report.request_value.request_id)]),
+    @arrow.Strings([Some(report.policy_name)]),
+    @arrow.Strings([Some(report.request_value.purpose)]),
+    @arrow.Strings([Some(recipient_text(report.request_value.recipient))]),
+    @arrow.Strings([Some(report.decision())]),
+    @arrow.Int32s([Some(report.source_rows)]),
+    @arrow.Int32s([Some(report.approved_indices.length())]),
+    @arrow.Int32s([Some(report.quarantined_indices.length())]),
+    @arrow.Int32s([Some(report.minimum_group_size_value)]),
+    @arrow.Strings([Some(report.released_columns_value.join(","))]),
+  ])
+}
+
+///|
+pub fn PrivacyPolicy::release(
+  self : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+  request : ReleaseRequest,
+) -> Result[ReleaseBundle, GateError] {
   match validate_batch(batch) {
     Err(error) => return Err(error)
     Ok(_) => ()
   }
-  let state : AuditState = {
+  let state : ReleaseState = {
     findings: [],
-    counts: [0, 0],
+    counts: [0],
     rejected: Array::make(batch.num_rows, false),
+    dataset_denied: [false],
     max_findings: self.max_findings,
+    request_id: request.request_id,
   }
-  for rule in self.rules {
-    apply_rule(batch, state, rule)
+  if !contains_string(self.allowed_purposes, request.purpose) {
+    dataset_finding(
+      state,
+      PurposeNotAllowed,
+      None,
+      "requested purpose is not allowed by the privacy policy",
+    )
   }
-  let accepted_indices : Array[Int] = []
-  let rejected_indices : Array[Int] = []
+  if !contains_recipient(self.allowed_recipients, request.recipient) {
+    dataset_finding(
+      state,
+      RecipientNotAllowed,
+      None,
+      "recipient trust boundary is not allowed by the privacy policy",
+    )
+  }
+  inspect_consent(self, batch, state)
+  inspect_policy_columns(self, batch, state)
+  enforce_k_anonymity(self, batch, state)
+  let approved_indices : Array[Int] = []
+  let quarantined_indices : Array[Int] = []
   for row in 0..<batch.num_rows {
     if state.rejected[row] {
-      rejected_indices.push(row)
+      quarantined_indices.push(row)
     } else {
-      accepted_indices.push(row)
+      approved_indices.push(row)
     }
   }
-  Ok({
-    contract_name: self.name,
+  let released_columns = released_column_names(self)
+  let report : PrivacyReport = {
+    policy_name: self.name,
+    request_value: request,
     source_rows: batch.num_rows,
-    error_count_value: state.counts[0],
-    warning_count_value: state.counts[1],
+    denial_count_value: state.counts[0],
     findings_value: state.findings,
-    truncated_value: state.counts[0] + state.counts[1] > state.findings.length(),
-    accepted_indices,
-    rejected_indices,
+    truncated_value: state.counts[0] > state.findings.length(),
+    approved_indices,
+    quarantined_indices,
+    released_columns_value: released_columns,
+    minimum_group_size_value: self.minimum_group_size,
+  }
+  let approved = if state.dataset_denied[0] {
+    match empty_batch() {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+  } else {
+    match project_approved(self, batch, report.approved_indices) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+  }
+  let quarantine = match take_batch(batch, report.quarantined_indices) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let findings = match findings_batch(report.findings_value) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let manifest = match manifest_batch(report) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  Ok({
+    report_value: report,
+    approved_value: approved,
+    quarantine_value: quarantine,
+    findings_value: findings,
+    manifest_value: manifest,
   })
 }
 
 ///|
-pub fn AuditReport::passed(self : AuditReport) -> Bool {
-  self.error_count_value == 0
+pub fn PrivacyReport::decision(self : PrivacyReport) -> String {
+  if self.denial_count_value == 0 {
+    "approved"
+  } else if self.approved_indices.is_empty() {
+    "denied"
+  } else {
+    "partial"
+  }
 }
 
 ///|
-pub fn AuditReport::source_row_count(self : AuditReport) -> Int {
+pub fn PrivacyReport::passed(self : PrivacyReport) -> Bool {
+  self.denial_count_value == 0
+}
+
+///|
+pub fn PrivacyReport::source_row_count(self : PrivacyReport) -> Int {
   self.source_rows
 }
 
 ///|
-pub fn AuditReport::accepted_row_count(self : AuditReport) -> Int {
-  self.accepted_indices.length()
+pub fn PrivacyReport::approved_row_count(self : PrivacyReport) -> Int {
+  self.approved_indices.length()
 }
 
 ///|
-pub fn AuditReport::rejected_row_count(self : AuditReport) -> Int {
-  self.rejected_indices.length()
+pub fn PrivacyReport::quarantined_row_count(self : PrivacyReport) -> Int {
+  self.quarantined_indices.length()
 }
 
 ///|
-pub fn AuditReport::error_count(self : AuditReport) -> Int {
-  self.error_count_value
+pub fn PrivacyReport::denial_count(self : PrivacyReport) -> Int {
+  self.denial_count_value
 }
 
 ///|
-pub fn AuditReport::warning_count(self : AuditReport) -> Int {
-  self.warning_count_value
-}
-
-///|
-pub fn AuditReport::issue_count(self : AuditReport) -> Int {
-  self.error_count_value + self.warning_count_value
-}
-
-///|
-pub fn AuditReport::findings(self : AuditReport) -> Array[Finding] {
+pub fn PrivacyReport::findings(self : PrivacyReport) -> Array[Finding] {
   self.findings_value.copy()
 }
 
 ///|
-pub fn AuditReport::truncated(self : AuditReport) -> Bool {
+pub fn PrivacyReport::truncated(self : PrivacyReport) -> Bool {
   self.truncated_value
 }
 
 ///|
-pub fn AuditReport::summary(self : AuditReport) -> String {
-  let status = if self.passed() { "PASS" } else { "FAIL" }
-  self.contract_name +
+pub fn PrivacyReport::released_columns(self : PrivacyReport) -> Array[String] {
+  self.released_columns_value.copy()
+}
+
+///|
+pub fn PrivacyReport::summary(self : PrivacyReport) -> String {
+  self.policy_name +
+  "/" +
+  self.request_value.request_id +
   ": " +
-  status +
+  self.decision() +
+  "; purpose=" +
+  self.request_value.purpose +
+  "; recipient=" +
+  recipient_text(self.request_value.recipient) +
   "; rows=" +
   self.source_rows.to_string() +
-  "; accepted=" +
-  self.accepted_row_count().to_string() +
+  "; released=" +
+  self.approved_indices.length().to_string() +
   "; quarantined=" +
-  self.rejected_row_count().to_string() +
-  "; errors=" +
-  self.error_count_value.to_string() +
-  "; warnings=" +
-  self.warning_count_value.to_string() +
+  self.quarantined_indices.length().to_string() +
+  "; denials=" +
+  self.denial_count_value.to_string() +
+  "; k=" +
+  self.minimum_group_size_value.to_string() +
   "; findings_shown=" +
   self.findings_value.length().to_string() +
   "; truncated=" +
@@ -768,104 +953,7 @@ pub fn AuditReport::summary(self : AuditReport) -> String {
 }
 
 ///|
-pub fn AuditReport::findings_batch(
-  self : AuditReport,
-) -> Result[@arrow.RecordBatch, GateError] {
-  let schema = @arrow.Schema::new([
-    @arrow.Field::new("rule_id", @arrow.Utf8, nullable=false),
-    @arrow.Field::new("severity", @arrow.Utf8, nullable=false),
-    @arrow.Field::new("row", @arrow.Int32),
-    @arrow.Field::new("column", @arrow.Utf8),
-    @arrow.Field::new("code", @arrow.Utf8, nullable=false),
-    @arrow.Field::new("message", @arrow.Utf8, nullable=false),
-  ])
-  validated_batch(schema, [
-    @arrow.Strings(self.findings_value.map(finding => Some(finding.rule_id))),
-    @arrow.Strings(
-      self.findings_value.map(finding => Some(severity_text(finding.severity))),
-    ),
-    @arrow.Int32s(self.findings_value.map(finding => finding.row)),
-    @arrow.Strings(self.findings_value.map(finding => finding.column)),
-    @arrow.Strings(
-      self.findings_value.map(finding => Some(finding_code_text(finding.code))),
-    ),
-    @arrow.Strings(self.findings_value.map(finding => Some(finding.message))),
-  ])
-}
-
-///|
-fn apply_redactions(
-  batch : @arrow.RecordBatch,
-  redactions : Array[Redaction],
-) -> Result[@arrow.RecordBatch, GateError] {
-  let columns = batch.columns.copy()
-  let seen : Array[String] = []
-  for redaction in redactions {
-    match redaction {
-      ReplaceUtf8(column, replacement) => {
-        for previous in seen {
-          if previous == column {
-            return Err(
-              InvalidRedaction("duplicate redaction column: " + column),
-            )
-          }
-        }
-        seen.push(column)
-        guard field_index(batch.schema, column) is Some(index) else {
-          return Err(InvalidRedaction("redaction column is missing: " + column))
-        }
-        match columns[index] {
-          @arrow.Strings(values) =>
-            columns[index] = @arrow.Strings(
-              values.map(value => value.map(_ => replacement)),
-            )
-          _ =>
-            return Err(
-              InvalidRedaction("redaction column is not utf8: " + column),
-            )
-        }
-      }
-    }
-  }
-  validated_batch(batch.schema, columns)
-}
-
-///|
-pub fn Contract::release(
-  self : Contract,
-  batch : @arrow.RecordBatch,
-  redactions? : Array[Redaction] = [],
-) -> Result[ReleaseBundle, GateError] {
-  let report = match self.audit(batch) {
-    Ok(value) => value
-    Err(error) => return Err(error)
-  }
-  let approved = match take_batch(batch, report.accepted_indices) {
-    Ok(value) => value
-    Err(error) => return Err(error)
-  }
-  let safe = match apply_redactions(approved, redactions) {
-    Ok(value) => value
-    Err(error) => return Err(error)
-  }
-  let quarantine = match take_batch(batch, report.rejected_indices) {
-    Ok(value) => value
-    Err(error) => return Err(error)
-  }
-  let findings = match report.findings_batch() {
-    Ok(value) => value
-    Err(error) => return Err(error)
-  }
-  Ok({
-    report_value: report,
-    approved_value: safe,
-    quarantine_value: quarantine,
-    findings_value: findings,
-  })
-}
-
-///|
-pub fn ReleaseBundle::report(self : ReleaseBundle) -> AuditReport {
+pub fn ReleaseBundle::report(self : ReleaseBundle) -> PrivacyReport {
   self.report_value
 }
 
@@ -882,4 +970,9 @@ pub fn ReleaseBundle::quarantine(self : ReleaseBundle) -> @arrow.RecordBatch {
 ///|
 pub fn ReleaseBundle::findings(self : ReleaseBundle) -> @arrow.RecordBatch {
   self.findings_value
+}
+
+///|
+pub fn ReleaseBundle::manifest(self : ReleaseBundle) -> @arrow.RecordBatch {
+  self.manifest_value
 }

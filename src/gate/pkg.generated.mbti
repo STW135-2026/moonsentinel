@@ -11,93 +11,115 @@ import {
 // Errors
 
 // Types and methods
-pub struct AuditReport {
-  contract_name : String
-  source_rows : Int
-  error_count_value : Int
-  warning_count_value : Int
-  findings_value : Array[Finding]
-  truncated_value : Bool
-  accepted_indices : Array[Int]
-  rejected_indices : Array[Int]
-}
-pub fn AuditReport::accepted_row_count(Self) -> Int
-pub fn AuditReport::error_count(Self) -> Int
-pub fn AuditReport::findings(Self) -> Array[Finding]
-pub fn AuditReport::findings_batch(Self) -> Result[@arrow.RecordBatch, GateError]
-pub fn AuditReport::issue_count(Self) -> Int
-pub fn AuditReport::passed(Self) -> Bool
-pub fn AuditReport::rejected_row_count(Self) -> Int
-pub fn AuditReport::source_row_count(Self) -> Int
-pub fn AuditReport::summary(Self) -> String
-pub fn AuditReport::truncated(Self) -> Bool
-pub fn AuditReport::warning_count(Self) -> Int
+pub(all) struct ColumnPolicy {
+  column : String
+  classification : DataClass
+  treatment : Treatment
+} derive(Eq, @debug.Debug)
 
-pub struct Contract {
-  name : String
-  rules : Array[Rule]
-  max_findings : Int
-}
-pub fn Contract::audit(Self, @arrow.RecordBatch) -> Result[AuditReport, GateError]
-pub fn Contract::name(Self) -> String
-pub fn Contract::new(String, Array[Rule], max_findings? : Int) -> Result[Self, GateError]
-pub fn Contract::release(Self, @arrow.RecordBatch, redactions? : Array[Redaction]) -> Result[ReleaseBundle, GateError]
+pub(all) struct ConsentRequirement {
+  column : String
+  granted_values : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DataClass {
+  PublicData
+  QuasiIdentifier
+  Sensitive
+  DirectIdentifier
+} derive(Eq, @debug.Debug)
 
 pub(all) struct Finding {
-  rule_id : String
-  severity : Severity
+  request_id : String
+  code : FindingCode
   row : Int?
   column : String?
-  code : FindingCode
   message : String
 } derive(Eq, @debug.Debug)
 
 pub(all) enum FindingCode {
+  PurposeNotAllowed
+  RecipientNotAllowed
   MissingColumn
   TypeMismatch
-  NullValue
-  OutOfRange
-  EmptyValue
-  NotAllowed
-  DuplicateValue
-  CrossFieldOrder
+  ConsentMissing
+  ConsentDenied
+  KAnonymityViolation
 } derive(Eq, @debug.Debug)
 
 pub(all) enum GateError {
-  InvalidContract(String)
+  InvalidPolicy(String)
+  InvalidRequest(String)
   InvalidBatch
-  InvalidRedaction(String)
 } derive(Eq, @debug.Debug)
 
-pub(all) enum Redaction {
-  ReplaceUtf8(String, String)
+pub struct PrivacyPolicy {
+  name : String
+  allowed_purposes : Array[String]
+  allowed_recipients : Array[Recipient]
+  consent : ConsentRequirement
+  columns : Array[ColumnPolicy]
+  minimum_group_size : Int
+  max_findings : Int
+}
+pub fn PrivacyPolicy::minimum_group_size(Self) -> Int
+pub fn PrivacyPolicy::name(Self) -> String
+pub fn PrivacyPolicy::new(String, Array[String], Array[Recipient], ConsentRequirement, Array[ColumnPolicy], minimum_group_size? : Int, max_findings? : Int) -> Result[Self, GateError]
+pub fn PrivacyPolicy::release(Self, @arrow.RecordBatch, ReleaseRequest) -> Result[ReleaseBundle, GateError]
+
+pub struct PrivacyReport {
+  policy_name : String
+  request_value : ReleaseRequest
+  source_rows : Int
+  denial_count_value : Int
+  findings_value : Array[Finding]
+  truncated_value : Bool
+  approved_indices : Array[Int]
+  quarantined_indices : Array[Int]
+  released_columns_value : Array[String]
+  minimum_group_size_value : Int
+}
+pub fn PrivacyReport::approved_row_count(Self) -> Int
+pub fn PrivacyReport::decision(Self) -> String
+pub fn PrivacyReport::denial_count(Self) -> Int
+pub fn PrivacyReport::findings(Self) -> Array[Finding]
+pub fn PrivacyReport::passed(Self) -> Bool
+pub fn PrivacyReport::quarantined_row_count(Self) -> Int
+pub fn PrivacyReport::released_columns(Self) -> Array[String]
+pub fn PrivacyReport::source_row_count(Self) -> Int
+pub fn PrivacyReport::summary(Self) -> String
+pub fn PrivacyReport::truncated(Self) -> Bool
+
+pub(all) enum Recipient {
+  Internal
+  Partner
+  Public
 } derive(Eq, @debug.Debug)
 
 pub struct ReleaseBundle {
-  report_value : AuditReport
+  report_value : PrivacyReport
   approved_value : @arrow.RecordBatch
   quarantine_value : @arrow.RecordBatch
   findings_value : @arrow.RecordBatch
+  manifest_value : @arrow.RecordBatch
 }
 pub fn ReleaseBundle::approved(Self) -> @arrow.RecordBatch
 pub fn ReleaseBundle::findings(Self) -> @arrow.RecordBatch
+pub fn ReleaseBundle::manifest(Self) -> @arrow.RecordBatch
 pub fn ReleaseBundle::quarantine(Self) -> @arrow.RecordBatch
-pub fn ReleaseBundle::report(Self) -> AuditReport
+pub fn ReleaseBundle::report(Self) -> PrivacyReport
 
-pub(all) enum Rule {
-  RequiredColumn(String, String, @arrow.DataType, Severity)
-  NotNull(String, String, Severity)
-  Int32Range(String, String, Int?, Int?, Severity)
-  Int64Range(String, String, Int64?, Int64?, Severity)
-  Utf8NonEmpty(String, String, Severity)
-  Utf8Allowed(String, String, Array[String], Severity)
-  Utf8Unique(String, String, Severity)
-  Int32LessOrEqual(String, String, String, Severity)
-} derive(@debug.Debug)
+pub(all) struct ReleaseRequest {
+  request_id : String
+  purpose : String
+  recipient : Recipient
+} derive(Eq, @debug.Debug)
+pub fn ReleaseRequest::new(String, String, Recipient) -> Result[Self, GateError]
 
-pub(all) enum Severity {
-  Warning
-  Error
+pub(all) enum Treatment {
+  Keep
+  ReplaceUtf8(String)
+  Drop
 } derive(Eq, @debug.Debug)
 
 // Type aliases

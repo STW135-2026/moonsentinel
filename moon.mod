@@ -11,7 +11,7 @@
 
 name = "STW135-2026/moonsentinel"
 
-version = "0.1.0"
+version = "0.3.0"
 
 readme = "README.md"
 
@@ -19,11 +19,11 @@ repository = "https://github.com/STW135-2026/moonsentinel"
 
 license = "Apache-2.0"
 
-keywords = [ "arrow", "data-quality", "privacy", "validation", "wasm" ]
+keywords = [ "arrow", "privacy", "consent", "k-anonymity", "wasm" ]
 
 preferred_target = "js"
 
-description = "Arrow-native data quality and privacy release gate for MoonBit"
+description = "Purpose-bound Arrow privacy release gate with consent and k-anonymity"
 
 import {
   "shunge/arrow@0.1.0",
