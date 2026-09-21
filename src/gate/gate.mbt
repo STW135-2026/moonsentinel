@@ -67,6 +67,7 @@ pub(all) enum FindingCode {
   ConsentMissing
   ConsentDenied
   KAnonymityViolation
+  LDiversityViolation
 } derive(Eq, Debug)
 
 ///|
@@ -145,6 +146,8 @@ pub struct PrivacyPolicy {
   consent : ConsentRequirement
   columns : Array[ColumnPolicy]
   minimum_group_size : Int
+  diversity_columns : Array[String]
+  minimum_distinct_sensitive_values : Int
   max_findings : Int
 }
 
@@ -161,6 +164,8 @@ pub struct PrivacyReport {
   quarantined_indices : Array[Int]
   released_columns_value : Array[String]
   minimum_group_size_value : Int
+  diversity_columns_value : Array[String]
+  minimum_distinct_sensitive_values_value : Int
 }
 
 ///|
@@ -222,6 +227,7 @@ fn finding_code_text(code : FindingCode) -> String {
     ConsentMissing => "consent_missing"
     ConsentDenied => "consent_denied"
     KAnonymityViolation => "k_anonymity_violation"
+    LDiversityViolation => "l_diversity_violation"
   }
 }
 
@@ -323,6 +329,44 @@ fn validate_policy_columns(columns : Array[ColumnPolicy]) -> String? {
 }
 
 ///|
+fn validate_diversity_columns(
+  columns : Array[ColumnPolicy],
+  diversity_columns : Array[String],
+  minimum_distinct_sensitive_values : Int,
+) -> String? {
+  if minimum_distinct_sensitive_values < 1 {
+    return Some("minimum_distinct_sensitive_values must be positive")
+  }
+  if minimum_distinct_sensitive_values > 1 && diversity_columns.is_empty() {
+    return Some("l-diversity requires at least one sensitive diversity column")
+  }
+  for index in 0..<diversity_columns.length() {
+    let name = diversity_columns[index]
+    if name == "" {
+      return Some("diversity column name must not be empty")
+    }
+    for previous in 0..<index {
+      if name == diversity_columns[previous] {
+        return Some("duplicate diversity column: " + name)
+      }
+    }
+    let mut found = false
+    for column in columns {
+      if column.column == name {
+        found = true
+        if !(column.classification is Sensitive) {
+          return Some("diversity column must be classified Sensitive: " + name)
+        }
+      }
+    }
+    if !found {
+      return Some("diversity column is missing from column policy: " + name)
+    }
+  }
+  None
+}
+
+///|
 pub fn PrivacyPolicy::new(
   name : String,
   allowed_purposes : Array[String],
@@ -330,6 +374,8 @@ pub fn PrivacyPolicy::new(
   consent : ConsentRequirement,
   columns : Array[ColumnPolicy],
   minimum_group_size? : Int = 2,
+  diversity_columns? : Array[String] = [],
+  minimum_distinct_sensitive_values? : Int = 1,
   max_findings? : Int = 100,
 ) -> Result[PrivacyPolicy, GateError] {
   if name == "" {
@@ -364,6 +410,13 @@ pub fn PrivacyPolicy::new(
   if minimum_group_size < 2 {
     return Err(InvalidPolicy("minimum_group_size must be at least 2"))
   }
+  match
+    validate_diversity_columns(
+      columns, diversity_columns, minimum_distinct_sensitive_values,
+    ) {
+    Some(message) => return Err(InvalidPolicy(message))
+    None => ()
+  }
   if max_findings < 1 {
     return Err(InvalidPolicy("max_findings must be positive"))
   }
@@ -377,6 +430,8 @@ pub fn PrivacyPolicy::new(
     },
     columns: columns.map(column => copy_column_policy(column)),
     minimum_group_size,
+    diversity_columns: diversity_columns.copy(),
+    minimum_distinct_sensitive_values,
     max_findings,
   })
 }
@@ -389,6 +444,13 @@ pub fn PrivacyPolicy::name(self : PrivacyPolicy) -> String {
 ///|
 pub fn PrivacyPolicy::minimum_group_size(self : PrivacyPolicy) -> Int {
   self.minimum_group_size
+}
+
+///|
+pub fn PrivacyPolicy::minimum_distinct_sensitive_values(
+  self : PrivacyPolicy,
+) -> Int {
+  self.minimum_distinct_sensitive_values
 }
 
 ///|
@@ -618,6 +680,17 @@ fn inspect_policy_columns(
       )
     }
   }
+  for name in policy.diversity_columns {
+    guard field_index(batch.schema, name) is Some(index) else { continue }
+    if !(batch.columns[index] is @arrow.Strings(_)) {
+      dataset_finding(
+        state,
+        TypeMismatch,
+        Some(name),
+        "l-diversity column must be utf8",
+      )
+    }
+  }
 }
 
 ///|
@@ -741,6 +814,69 @@ fn enforce_k_anonymity(
 }
 
 ///|
+fn distinct_non_null_strings(values : Array[String?], rows : Array[Int]) -> Int {
+  let distinct : Array[String] = []
+  for row in rows {
+    match values[row] {
+      Some(value) =>
+        if !contains_string(distinct, value) {
+          distinct.push(value)
+        }
+      None => ()
+    }
+  }
+  distinct.length()
+}
+
+///|
+fn enforce_l_diversity(
+  policy : PrivacyPolicy,
+  batch : @arrow.RecordBatch,
+  state : ReleaseState,
+) -> Unit {
+  if state.dataset_denied[0] ||
+    policy.minimum_distinct_sensitive_values <= 1 ||
+    policy.diversity_columns.is_empty() {
+    return
+  }
+  let quasi = quasi_indices(policy, batch)
+  let eligible = state.rejected.map(value => !value)
+  let keys = Array::make(batch.num_rows, "")
+  for row in 0..<batch.num_rows {
+    if eligible[row] {
+      keys[row] = anonymity_key(batch, quasi, row)
+    }
+  }
+  for row in 0..<batch.num_rows {
+    if eligible[row] {
+      let group_rows : Array[Int] = []
+      for other in 0..<batch.num_rows {
+        if eligible[other] && keys[other] == keys[row] {
+          group_rows.push(other)
+        }
+      }
+      for name in policy.diversity_columns {
+        guard field_index(batch.schema, name) is Some(index) else { continue }
+        match batch.columns[index] {
+          @arrow.Strings(values) =>
+            if distinct_non_null_strings(values, group_rows) <
+              policy.minimum_distinct_sensitive_values {
+              row_finding(
+                state,
+                LDiversityViolation,
+                row,
+                Some(name),
+                "sensitive values in the quasi-identifier group are less diverse than the configured minimum",
+              )
+            }
+          _ => ()
+        }
+      }
+    }
+  }
+}
+
+///|
 fn released_column_names(policy : PrivacyPolicy) -> Array[String] {
   let names : Array[String] = []
   for column_policy in policy.columns {
@@ -824,6 +960,12 @@ fn manifest_batch(
     @arrow.Field::new("released_rows", @arrow.Int32, nullable=false),
     @arrow.Field::new("quarantined_rows", @arrow.Int32, nullable=false),
     @arrow.Field::new("minimum_group_size", @arrow.Int32, nullable=false),
+    @arrow.Field::new(
+      "minimum_distinct_sensitive_values",
+      @arrow.Int32,
+      nullable=false,
+    ),
+    @arrow.Field::new("diversity_columns", @arrow.Utf8, nullable=false),
     @arrow.Field::new("released_columns", @arrow.Utf8, nullable=false),
   ])
   validated_batch(schema, [
@@ -836,6 +978,8 @@ fn manifest_batch(
     @arrow.Int32s([Some(report.approved_indices.length())]),
     @arrow.Int32s([Some(report.quarantined_indices.length())]),
     @arrow.Int32s([Some(report.minimum_group_size_value)]),
+    @arrow.Int32s([Some(report.minimum_distinct_sensitive_values_value)]),
+    @arrow.Strings([Some(report.diversity_columns_value.join(","))]),
     @arrow.Strings([Some(report.released_columns_value.join(","))]),
   ])
 }
@@ -877,6 +1021,7 @@ pub fn PrivacyPolicy::release(
   inspect_consent(self, batch, state)
   inspect_policy_columns(self, batch, state)
   enforce_k_anonymity(self, batch, state)
+  enforce_l_diversity(self, batch, state)
   let approved_indices : Array[Int] = []
   let quarantined_indices : Array[Int] = []
   for row in 0..<batch.num_rows {
@@ -898,6 +1043,8 @@ pub fn PrivacyPolicy::release(
     quarantined_indices,
     released_columns_value: released_columns,
     minimum_group_size_value: self.minimum_group_size,
+    diversity_columns_value: self.diversity_columns.copy(),
+    minimum_distinct_sensitive_values_value: self.minimum_distinct_sensitive_values,
   }
   let approved = if state.dataset_denied[0] {
     match empty_batch() {
@@ -1003,6 +1150,10 @@ pub fn PrivacyReport::summary(self : PrivacyReport) -> String {
   self.denial_count_value.to_string() +
   "; k=" +
   self.minimum_group_size_value.to_string() +
+  "; l=" +
+  self.minimum_distinct_sensitive_values_value.to_string() +
+  "; diversity=" +
+  self.diversity_columns_value.join(",") +
   "; findings_shown=" +
   self.findings_value.length().to_string() +
   "; truncated=" +

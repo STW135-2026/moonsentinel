@@ -6,6 +6,7 @@ fn research_batch() -> @arrow.RecordBatch {
     @arrow.Field::new("research_consent", @arrow.Utf8),
     @arrow.Field::new("country", @arrow.Utf8),
     @arrow.Field::new("age_band", @arrow.Utf8),
+    @arrow.Field::new("case_outcome", @arrow.Utf8),
     @arrow.Field::new("risk_score", @arrow.Int32),
   ])
   try! @arrow.RecordBatch::new(schema, [
@@ -49,6 +50,14 @@ fn research_batch() -> @arrow.RecordBatch {
       Some("20-29"),
       Some("50-59"),
     ]),
+    @arrow.Strings([
+      Some("confirmed"),
+      Some("cleared"),
+      Some("confirmed"),
+      Some("confirmed"),
+      Some("cleared"),
+      Some("confirmed"),
+    ]),
     @arrow.Int32s([Some(10), Some(20), Some(30), Some(40), Some(50), Some(60)]),
   ])
 }
@@ -87,12 +96,19 @@ fn research_policy(max_findings? : Int = 100) -> @gate.PrivacyPolicy {
         treatment: @gate.Keep,
       },
       {
+        column: "case_outcome",
+        classification: @gate.Sensitive,
+        treatment: @gate.Drop,
+      },
+      {
         column: "risk_score",
         classification: @gate.PublicData,
         treatment: @gate.Keep,
       },
     ],
     minimum_group_size=2,
+    diversity_columns=["case_outcome"],
+    minimum_distinct_sensitive_values=2,
     max_findings~,
   ).unwrap()
 }
@@ -103,7 +119,7 @@ fn research_request() -> @gate.ReleaseRequest {
 }
 
 ///|
-test "release binds purpose, consent, k-anonymity, and minimization" {
+test "release binds purpose, consent, k-anonymity, l-diversity, and minimization" {
   let bundle = research_policy()
     .release(research_batch(), research_request())
     .unwrap()
@@ -119,10 +135,16 @@ test "release binds purpose, consent, k-anonymity, and minimization" {
   assert_true(report.findings()[1].code is @gate.KAnonymityViolation)
   assert_eq(bundle.approved().schema.fields.length(), 4)
   assert_eq(bundle.approved().num_rows, 4)
-  assert_eq(bundle.quarantine().schema.fields.length(), 6)
+  assert_eq(bundle.quarantine().schema.fields.length(), 7)
   assert_eq(bundle.quarantine().num_rows, 2)
   assert_eq(bundle.findings().num_rows, 2)
   assert_eq(bundle.manifest().num_rows, 1)
+  assert_eq(bundle.manifest().schema.fields.length(), 12)
+  assert_true(bundle.manifest().columns[9] is @arrow.Int32s([Some(2)]))
+  assert_true(
+    bundle.manifest().columns[10] is @arrow.Strings([Some("case_outcome")]),
+  )
+  assert_eq(research_policy().minimum_distinct_sensitive_values(), 2)
   assert_true(
     bundle.approved().columns[0]
     is @arrow.Strings(
@@ -183,6 +205,23 @@ test "policies are fail-closed" {
   )
   assert_true(
     @gate.PrivacyPolicy::new(
+      "bad-l",
+      ["analytics"],
+      [@gate.Partner],
+      { column: "consent", granted_values: ["yes"], },
+      [
+        {
+          column: "country",
+          classification: @gate.QuasiIdentifier,
+          treatment: @gate.Keep,
+        },
+      ],
+      minimum_distinct_sensitive_values=2,
+    )
+    is Err(@gate.InvalidPolicy(_)),
+  )
+  assert_true(
+    @gate.PrivacyPolicy::new(
       "bad-k",
       ["analytics"],
       [@gate.Partner],
@@ -235,6 +274,57 @@ test "bounded findings preserve exact denial counts" {
   assert_eq(report.denial_count(), 2)
   assert_eq(report.findings().length(), 1)
   assert_true(report.truncated())
+}
+
+///|
+test "l-diversity rejects a k-anonymous group with one sensitive value" {
+  let schema = @arrow.Schema::new([
+    @arrow.Field::new("consent", @arrow.Utf8),
+    @arrow.Field::new("region", @arrow.Utf8),
+    @arrow.Field::new("diagnosis", @arrow.Utf8),
+  ])
+  let batch = try! @arrow.RecordBatch::new(schema, [
+    @arrow.Strings([Some("yes"), Some("yes")]),
+    @arrow.Strings([Some("north"), Some("north")]),
+    @arrow.Strings([Some("alpha"), Some("alpha")]),
+  ])
+  let policy = @gate.PrivacyPolicy::new(
+    "clinical-research-v1",
+    ["clinical_research"],
+    [@gate.Partner],
+    { column: "consent", granted_values: ["yes"], },
+    [
+      {
+        column: "consent",
+        classification: @gate.Sensitive,
+        treatment: @gate.Drop,
+      },
+      {
+        column: "region",
+        classification: @gate.QuasiIdentifier,
+        treatment: @gate.Keep,
+      },
+      {
+        column: "diagnosis",
+        classification: @gate.Sensitive,
+        treatment: @gate.ReplaceUtf8("[DIAGNOSIS]"),
+      },
+    ],
+    minimum_group_size=2,
+    diversity_columns=["diagnosis"],
+    minimum_distinct_sensitive_values=2,
+  ).unwrap()
+  let request = @gate.ReleaseRequest::new(
+    "req-l-diversity",
+    "clinical_research",
+    @gate.Partner,
+  ).unwrap()
+  let bundle = policy.release(batch, request).unwrap()
+  assert_eq(bundle.report().decision(), "denied")
+  assert_eq(bundle.report().denial_count(), 2)
+  assert_eq(bundle.report().approved_row_count(), 0)
+  assert_true(bundle.report().findings()[0].code is @gate.LDiversityViolation)
+  assert_true(bundle.report().findings()[1].code is @gate.LDiversityViolation)
 }
 
 ///|

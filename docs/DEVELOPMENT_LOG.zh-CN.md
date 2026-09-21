@@ -22,6 +22,7 @@
 - `PrivacyPolicy` 定义用途与接收方允许列表；
 - `ConsentRequirement` 对每行核验当前用途的同意；
 - 在同意候选集内执行多列 k-匿名，避免未授权记录虚增群体；
+- 在通过 k-匿名的固定候选集内执行敏感属性 l-diversity；
 - `DataClass` 与 `Treatment` 强制敏感列删除或替换；
 - 未配置字段默认不进入获准数据，实现失败关闭的数据最小化；
 - 同时返回 approved、quarantine、findings 和 manifest 四类 Arrow 批次。
@@ -43,7 +44,7 @@
 - `moon fmt --check`
 - `moon check --target all --deny-warn`
 - `moon test --target all --deny-warn`
-- 8 项测试在 Native、JavaScript、Wasm、Wasm-GC 四个目标通过；
+- 9 项测试在 Native、JavaScript、Wasm、Wasm-GC 四个目标通过；
 - 演示输出验证 6 行输入、4 行放行、2 行隔离、字段最小化、邮件替换和 IPC 交接。
 
 ## 后续差异化复核清单
@@ -56,4 +57,4 @@
 4. README、Markdown 申报书、Word 申报书、演示与代码是否保持同一口径；
 5. GitHub 是否出现新的同类 MoonBit 项目，需要更新对比说明。
 
-计划中的 l-diversity、策略版本签名和可验证发布清单也必须通过这份清单后再实现。
+计划中的 t-closeness、策略版本签名和可验证发布清单也必须通过这份清单后再实现。

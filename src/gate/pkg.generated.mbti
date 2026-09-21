@@ -57,6 +57,7 @@ pub(all) enum FindingCode {
   ConsentMissing
   ConsentDenied
   KAnonymityViolation
+  LDiversityViolation
 } derive(Eq, @debug.Debug)
 pub fn FindingCode::equal(Self, Self) -> Bool
 pub fn FindingCode::not_equal(Self, Self) -> Bool
@@ -78,11 +79,14 @@ pub struct PrivacyPolicy {
   consent : ConsentRequirement
   columns : Array[ColumnPolicy]
   minimum_group_size : Int
+  diversity_columns : Array[String]
+  minimum_distinct_sensitive_values : Int
   max_findings : Int
 }
+pub fn PrivacyPolicy::minimum_distinct_sensitive_values(Self) -> Int
 pub fn PrivacyPolicy::minimum_group_size(Self) -> Int
 pub fn PrivacyPolicy::name(Self) -> String
-pub fn PrivacyPolicy::new(String, Array[String], Array[Recipient], ConsentRequirement, Array[ColumnPolicy], minimum_group_size? : Int, max_findings? : Int) -> Result[Self, GateError]
+pub fn PrivacyPolicy::new(String, Array[String], Array[Recipient], ConsentRequirement, Array[ColumnPolicy], minimum_group_size? : Int, diversity_columns? : Array[String], minimum_distinct_sensitive_values? : Int, max_findings? : Int) -> Result[Self, GateError]
 pub fn PrivacyPolicy::release(Self, @arrow.RecordBatch, ReleaseRequest) -> Result[ReleaseBundle, GateError]
 
 pub struct PrivacyReport {
@@ -96,6 +100,8 @@ pub struct PrivacyReport {
   quarantined_indices : Array[Int]
   released_columns_value : Array[String]
   minimum_group_size_value : Int
+  diversity_columns_value : Array[String]
+  minimum_distinct_sensitive_values_value : Int
 }
 pub fn PrivacyReport::approved_row_count(Self) -> Int
 pub fn PrivacyReport::decision(Self) -> String

@@ -6,6 +6,7 @@ fn source_batch() -> @arrow.RecordBatch {
     @arrow.Field::new("research_consent", @arrow.Utf8),
     @arrow.Field::new("country", @arrow.Utf8),
     @arrow.Field::new("age_band", @arrow.Utf8),
+    @arrow.Field::new("case_outcome", @arrow.Utf8),
     @arrow.Field::new("risk_score", @arrow.Int32),
   ])
   try! @arrow.RecordBatch::new(schema, [
@@ -49,6 +50,14 @@ fn source_batch() -> @arrow.RecordBatch {
       Some("20-29"),
       Some("50-59"),
     ]),
+    @arrow.Strings([
+      Some("confirmed"),
+      Some("cleared"),
+      Some("confirmed"),
+      Some("confirmed"),
+      Some("cleared"),
+      Some("confirmed"),
+    ]),
     @arrow.Int32s([Some(10), Some(20), Some(30), Some(40), Some(50), Some(60)]),
   ])
 }
@@ -87,12 +96,19 @@ fn policy() -> @gate.PrivacyPolicy {
         treatment: @gate.Keep,
       },
       {
+        column: "case_outcome",
+        classification: @gate.Sensitive,
+        treatment: @gate.Drop,
+      },
+      {
         column: "risk_score",
         classification: @gate.PublicData,
         treatment: @gate.Keep,
       },
     ],
     minimum_group_size=2,
+    diversity_columns=["case_outcome"],
+    minimum_distinct_sensitive_values=2,
   ).unwrap()
 }
 

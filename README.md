@@ -5,7 +5,8 @@
 MoonSentinel 是用 MoonBit 编写的**用途绑定隐私发布门禁**。它接收 Arrow
 `RecordBatch`、`PrivacyPolicy` 和 `ReleaseRequest`，在数据离开当前信任边界前检查：
 本次用途是否获准、接收方是否获准、每行是否有对应同意，以及准标识符组合是否达到
-指定的 k-匿名阈值。通过的行会按最小化策略投影和脱敏，同时生成可归档的发布清单。
+指定的 k-匿名阈值、等价类内敏感属性是否达到 l-diversity。通过的行会按最小化策略
+投影和脱敏，同时生成可归档的发布清单。
 
 项目不再提供通用数据质量合同、非空/范围/枚举/唯一性规则、数据画像、合同差异或
 CSV/JSONL 校验 CLI。上述能力属于
@@ -17,6 +18,7 @@ CSV/JSONL 校验 CLI。上述能力属于
 - 用途和接收方双重允许列表，任一不匹配时整批拒绝；
 - 逐行同意检查：缺失同意或同意值不覆盖当前用途时隔离该行；
 - 对获准候选行执行多列 k-匿名检查，稀有准标识符组合不会被发布；
+- 对通过 k-匿名的等价类执行可配置 l-diversity，敏感属性过于单一时继续隔离；
 - 默认拒绝的字段最小化：未写入列策略的输入列不会进入输出；
 - `DirectIdentifier` 和 `Sensitive` 列不能以 `Keep` 方式发布；
 - `Keep`、`ReplaceUtf8`、`Drop` 三种输出处置；
@@ -40,7 +42,7 @@ moon run cmd/main --target native --deny-warn
 
 ```text
 MoonSentinel purpose-bound privacy release
-fraud-research-v1/req-2026-001: partial; purpose=fraud_research; recipient=partner; rows=6; released=4; quarantined=2; denials=2; k=2; findings_shown=2; truncated=false
+fraud-research-v1/req-2026-001: partial; purpose=fraud_research; recipient=partner; rows=6; released=4; quarantined=2; denials=2; k=2; l=2; diversity=case_outcome; findings_shown=2; truncated=false
 released columns: email, country, age_band, risk_score
 approved rows: 4
 quarantined rows: 2
@@ -81,8 +83,15 @@ let policy = @gate.PrivacyPolicy::new(
       classification: @gate.QuasiIdentifier,
       treatment: @gate.Keep,
     },
+    {
+      column: "case_outcome",
+      classification: @gate.Sensitive,
+      treatment: @gate.Drop,
+    },
   ],
   minimum_group_size=2,
+  diversity_columns=["case_outcome"],
+  minimum_distinct_sensitive_values=2,
 ).unwrap()
 
 let request = @gate.ReleaseRequest::new(
@@ -104,7 +113,7 @@ let manifest = bundle.manifest()
 | --- | --- | --- |
 | 核心问题 | 数据是否满足 schema 与质量规则 | 数据是否被授权向特定接收方用于特定目的 |
 | 输入 | CSV/JSONL、数据合同 | Arrow RecordBatch、隐私政策、发布请求 |
-| 核心算法 | 完整性、枚举、范围、唯一性、画像、合同 diff | 用途/接收方授权、逐行同意、k-匿名、字段最小化 |
+| 核心算法 | 完整性、枚举、范围、唯一性、画像、合同 diff | 用途/接收方授权、逐行同意、k-匿名、l-diversity、字段最小化 |
 | 输出 | 文本/JSON 校验报告和画像 | 最小化数据、受控隔离、隐私拒绝、发布清单，均为 Arrow |
 | 当前 API | `Contract`、`Rule`、`ValidationReport` | `PrivacyPolicy`、`ReleaseRequest`、`PrivacyReport` |
 
@@ -125,6 +134,9 @@ RecordBatch + PrivacyPolicy + ReleaseRequest
       k-anonymity on eligible candidates
                     |
                     v
+       l-diversity on sensitive values
+                    |
+                    v
      fail-closed projection and masking
           /        |        |       \
    approved  quarantine  findings  manifest
@@ -132,7 +144,8 @@ RecordBatch + PrivacyPolicy + ReleaseRequest
 
 ## 当前边界
 
-- k-匿名在单个 `RecordBatch` 内计算；还没有跨批次状态或 l-diversity；
+- k-匿名和 l-diversity 在单个 `RecordBatch` 内计算，尚未支持跨批次状态；
+- 当前 l-diversity 的敏感属性列只支持 UTF-8，空值不计入不同值数量；
 - 当前脱敏为 UTF-8 固定替换，不声称是密码学匿名化；
 - 当前接收方只有 `Internal`、`Partner`、`Public` 三档；
 - quarantine 保留源列，必须由调用方存放在受控区域；
