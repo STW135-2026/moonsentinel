@@ -2,11 +2,31 @@
 
 [![CI](https://github.com/STW135-2026/moonsentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/STW135-2026/moonsentinel/actions/workflows/ci.yml)
 
-MoonSentinel 是用 MoonBit 编写的**用途绑定隐私发布门禁**。它接收 Arrow
-`RecordBatch`、`PrivacyPolicy` 和 `ReleaseRequest`，在数据离开当前信任边界前检查：
-本次用途是否获准、接收方是否获准、每行是否有对应同意，以及准标识符组合是否达到
-指定的 k-匿名阈值、等价类内敏感属性是否达到 l-diversity。通过的行会按最小化策略
-投影和脱敏，同时生成可归档的发布清单。
+MoonSentinel 是用 MoonBit 编写的**多场景数据共享前授权核验与隐私发布工具**。
+
+一份数据通过格式和质量检查，不等于它可以直接交给合作方。交付人员还要确认本次用途和
+接收方是否获准、每条记录是否具有对应同意、交付结果中是否残留直接标识符，以及小群体
+特征是否可能重新识别个人。MoonSentinel 把这些条件写成可执行策略，在数据离开当前系统前
+统一检查。
+
+它接收 Arrow `RecordBatch`、扁平 JSONL 记录或带表头的 CSV，并结合 `PrivacyPolicy` 和
+`ReleaseRequest`。JSONL 和 CSV 会先转换为 Arrow；通过的行会按列白名单
+投影和脱敏；不符合条件的行进入隔离结果；每次运行还会生成机器可读的拒绝原因和交付回执。
+
+## 为什么需要这个工具
+
+在临时 SQL 或导出脚本中，授权条件、字段删除和脱敏通常分开维护。源表增加字段后，
+`select *` 还可能把新列带出。即使脚本得到了一个结构正确的文件，也不一定能回答“为什么
+这次可以交给这个接收方”以及“哪些记录因什么原因没有交付”。
+
+MoonSentinel 适合接在数据导出任务的最后一步。它不替代上游质量检查，而是把一次交付
+绑定到请求编号、用途和接收方，并产出可保存的判断依据。适用工作流不限于某个行业：研究
+机构交换样本、企业向外部服务商提供业务数据、团队共享用户或设备数据、以及整理公开数据
+集，都可能需要回答“这批数据是否可以按本次用途交付，具体哪些行和字段可以出去”。
+
+当前版本既可直接接收 Arrow `RecordBatch`，也可把 JSONL 或 CSV 转换为 Arrow 后执行相同策略；
+通过门禁的 Arrow 结果还能导出为 JSONL 或 CSV。CSV 不携带列类型，因此导入后所有列均按
+UTF-8 字符串处理；未加引号的空单元格转为 null，`""` 保留为空字符串。
 
 项目不再提供通用数据质量合同、非空/范围/枚举/唯一性规则、数据画像、合同差异或
 CSV/JSONL 校验 CLI。上述能力属于
@@ -23,6 +43,10 @@ CSV/JSONL 校验 CLI。上述能力属于
 - `DirectIdentifier` 和 `Sensitive` 列不能以 `Keep` 方式发布；
 - `Keep`、`ReplaceUtf8`、`Drop` 三种输出处置；
 - `approved`、`quarantine`、`privacy_findings`、`release_manifest` 四个 Arrow 输出；
+- JSONL 与 Arrow 的适配：每行一个扁平 JSON 对象，支持字符串、布尔、数字和 null；缺失字段按 null 处理；
+- `batch_to_jsonl` 可把筛选后的 Arrow 批次序列化为 JSONL；
+- CSV 与 Arrow 的适配：带表头、逗号和引号转义、LF/CRLF、引号内换行；字段保持文本，未加引号的空单元格按 null 处理；
+- `batch_to_csv` 可把筛选后的 Arrow 批次序列化为带表头的 CSV；
 - findings 数量可设上限，但拒绝总数和行处置仍保持准确；
 - Native、JavaScript、Wasm、Wasm-GC 四目标自动检查和测试。
 
@@ -36,12 +60,12 @@ moon test --target all --deny-warn
 moon run cmd/main --target native --deny-warn
 ```
 
-演示模拟一次面向合作方的反欺诈研究数据发布。6 行源数据中，1 行没有对应用途的同意，
+演示模拟一次面向合作方的反欺诈研究数据交付。6 行源数据中，1 行没有对应用途的同意，
 1 行因 `country + age_band` 组合未达到 `k=2` 被隔离；直接标识符和同意列被删除，邮件
 被替换后只发布 4 行：
 
 ```text
-MoonSentinel purpose-bound privacy release
+MoonSentinel partner data delivery check
 fraud-research-v1/req-2026-001: partial; purpose=fraud_research; recipient=partner; rows=6; released=4; quarantined=2; denials=2; k=2; l=2; diversity=case_outcome; findings_shown=2; truncated=false
 released columns: email, country, age_band, risk_score
 approved rows: 4
@@ -49,9 +73,12 @@ quarantined rows: 2
 privacy findings: 2
 release manifest rows: 1
 masked email: [EMAIL]
-Arrow IPC handoff: 1136 bytes, 4 released rows
+Arrow IPC handoff: 1152 bytes, 4 released rows
+JSONL handoff: 4 released rows, 4 fields
+CSV handoff: 4 released rows, 4 fields
 ```
 
+演示先将示例记录转为 JSONL，再解析为 Arrow 后执行发布策略；获准结果同时演示 Arrow IPC 与 JSONL 交接。
 IPC 字节数可能随底层 Arrow 版本变化；决策、行数、列名和脱敏结果是验收依据。
 
 ## API 示例
@@ -61,7 +88,12 @@ let policy = @gate.PrivacyPolicy::new(
   "fraud-research-v1",
   ["fraud_research"],
   [@gate.Partner],
-  { column: "research_consent", granted_values: ["yes"] },
+  {
+    column: "research_consent",
+    grants: [
+      { purpose: "fraud_research", granted_values: ["yes"] },
+    ],
+  },
   [
     {
       column: "user_id",
@@ -105,6 +137,14 @@ let safe_rows = bundle.approved()
 let controlled_quarantine = bundle.quarantine()
 let denials = bundle.findings()
 let manifest = bundle.manifest()
+
+let jsonl_batch = @gate.jsonl_to_batch(jsonl_text).unwrap()
+let jsonl_bundle = policy.release(jsonl_batch, request).unwrap()
+let approved_jsonl = @gate.batch_to_jsonl(jsonl_bundle.approved()).unwrap()
+
+let csv_batch = @gate.csv_to_batch(csv_text).unwrap()
+let csv_bundle = policy.release(csv_batch, request).unwrap()
+let approved_csv = @gate.batch_to_csv(csv_bundle.approved()).unwrap()
 ```
 
 ## 与 MoonVerity 的实质差异
@@ -112,9 +152,9 @@ let manifest = bundle.manifest()
 | 维度 | MoonVerity | MoonSentinel |
 | --- | --- | --- |
 | 核心问题 | 数据是否满足 schema 与质量规则 | 数据是否被授权向特定接收方用于特定目的 |
-| 输入 | CSV/JSONL、数据合同 | Arrow RecordBatch、隐私政策、发布请求 |
+| 输入 | CSV/JSONL、数据合同 | CSV、JSONL 或 Arrow RecordBatch、隐私政策、发布请求 |
 | 核心算法 | 完整性、枚举、范围、唯一性、画像、合同 diff | 用途/接收方授权、逐行同意、k-匿名、l-diversity、字段最小化 |
-| 输出 | 文本/JSON 校验报告和画像 | 最小化数据、受控隔离、隐私拒绝、发布清单，均为 Arrow |
+| 输出 | 文本/JSON 校验报告和画像 | 最小化数据、受控隔离、隐私拒绝、发布清单为 Arrow；获准数据可导出 CSV/JSONL |
 | 当前 API | `Contract`、`Rule`、`ValidationReport` | `PrivacyPolicy`、`ReleaseRequest`、`PrivacyReport` |
 
 完整的逐项代码证据见[差异化核查](docs/DIFFERENTIATION.zh-CN.md)。
@@ -122,7 +162,10 @@ let manifest = bundle.manifest()
 ## 处理顺序
 
 ```text
-RecordBatch + PrivacyPolicy + ReleaseRequest
+CSV / JSONL / RecordBatch + PrivacyPolicy + ReleaseRequest
+                    |
+                    v
+          CSV / JSONL -> RecordBatch
                     |
                     v
        purpose / recipient authorization
@@ -144,6 +187,9 @@ RecordBatch + PrivacyPolicy + ReleaseRequest
 
 ## 当前边界
 
+- JSONL 当前仅接受一行一个扁平对象；嵌套对象和数组不支持；CSV 要求首行为表头且每行列数一致；
+- CSV 列按 UTF-8 字符串导入，不自动猜测数值或布尔类型；未加引号的空单元格转为 null，引用的空字符串保留为空字符串；
+- JSONL 输入与导出都对绝对值大于 `9007199254740991` 的数值失败关闭，避免导出的数据无法无损导回；同列混合类型会拒绝，整数和小数可提升为浮点数；
 - k-匿名和 l-diversity 在单个 `RecordBatch` 内计算，尚未支持跨批次状态；
 - 当前 l-diversity 的敏感属性列只支持 UTF-8，空值不计入不同值数量；
 - 当前脱敏为 UTF-8 固定替换，不声称是密码学匿名化；

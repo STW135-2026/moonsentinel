@@ -7,6 +7,13 @@ import {
 }
 
 // Values
+pub fn batch_to_csv(@arrow.RecordBatch) -> Result[String, GateError]
+
+pub fn batch_to_jsonl(@arrow.RecordBatch) -> Result[String, GateError]
+
+pub fn csv_to_batch(String) -> Result[@arrow.RecordBatch, GateError]
+
+pub fn jsonl_to_batch(String) -> Result[@arrow.RecordBatch, GateError]
 
 // Errors
 
@@ -22,7 +29,7 @@ pub fn ColumnPolicy::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ConsentRequirement {
   column : String
-  granted_values : Array[String]
+  grants : Array[PurposeConsent]
 } derive(Eq, @debug.Debug)
 pub fn ConsentRequirement::equal(Self, Self) -> Bool
 pub fn ConsentRequirement::not_equal(Self, Self) -> Bool
@@ -66,6 +73,7 @@ pub fn FindingCode::to_repr(Self) -> @debug.Repr
 pub(all) enum GateError {
   InvalidPolicy(String)
   InvalidRequest(String)
+  InvalidInput(String)
   InvalidBatch
 } derive(Eq, @debug.Debug)
 pub fn GateError::equal(Self, Self) -> Bool
@@ -113,6 +121,14 @@ pub fn PrivacyReport::released_columns(Self) -> Array[String]
 pub fn PrivacyReport::source_row_count(Self) -> Int
 pub fn PrivacyReport::summary(Self) -> String
 pub fn PrivacyReport::truncated(Self) -> Bool
+
+pub(all) struct PurposeConsent {
+  purpose : String
+  granted_values : Array[String]
+} derive(Eq, @debug.Debug)
+pub fn PurposeConsent::equal(Self, Self) -> Bool
+pub fn PurposeConsent::not_equal(Self, Self) -> Bool
+pub fn PurposeConsent::to_repr(Self) -> @debug.Repr
 
 pub(all) enum Recipient {
   Internal

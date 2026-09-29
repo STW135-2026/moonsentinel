@@ -68,7 +68,10 @@ fn policy() -> @gate.PrivacyPolicy {
     "fraud-research-v1",
     ["fraud_research"],
     [@gate.Partner],
-    { column: "research_consent", granted_values: ["yes"], },
+    {
+      column: "research_consent",
+      grants: [{ purpose: "fraud_research", granted_values: ["yes"], }],
+    },
     [
       {
         column: "user_id",
@@ -119,8 +122,10 @@ fn main {
     "fraud_research",
     @gate.Partner,
   ).unwrap()
-  let bundle = policy().release(source_batch(), request).unwrap()
-  println("MoonSentinel purpose-bound privacy release")
+  let source_jsonl = @gate.batch_to_jsonl(source_batch()).unwrap()
+  let source_from_jsonl = @gate.jsonl_to_batch(source_jsonl).unwrap()
+  let bundle = policy().release(source_from_jsonl, request).unwrap()
+  println("MoonSentinel partner data delivery check")
   println(bundle.report().summary())
   println("released columns: \{bundle.report().released_columns().join(", ")}")
   println("approved rows: \{bundle.approved().num_rows}")
@@ -137,5 +142,23 @@ fn main {
   let restored = try! @arrow.read_stream(bytes)
   println(
     "Arrow IPC handoff: \{bytes.length()} bytes, \{restored.batches[0].num_rows} released rows",
+  )
+  let approved_jsonl = @gate.batch_to_jsonl(bundle.approved()).unwrap()
+  let jsonl_round_trip = @gate.jsonl_to_batch(approved_jsonl).unwrap()
+  println(
+    "JSONL handoff: \{jsonl_round_trip.num_rows} released rows, \{jsonl_round_trip.schema.fields.length()} fields",
+  )
+  let source_csv = @gate.batch_to_csv(source_batch()).unwrap()
+  let source_from_csv = @gate.csv_to_batch(source_csv).unwrap()
+  let csv_request = @gate.ReleaseRequest::new(
+    "req-csv-001",
+    "fraud_research",
+    @gate.Partner,
+  ).unwrap()
+  let csv_bundle = policy().release(source_from_csv, csv_request).unwrap()
+  let approved_csv = @gate.batch_to_csv(csv_bundle.approved()).unwrap()
+  let csv_round_trip = @gate.csv_to_batch(approved_csv).unwrap()
+  println(
+    "CSV handoff: \{csv_round_trip.num_rows} released rows, \{csv_round_trip.schema.fields.length()} fields",
   )
 }

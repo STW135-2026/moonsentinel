@@ -14,7 +14,7 @@ Error/Warning 门禁与 MoonVerity 的数据质量范围重合。当前代码已
 
 这次差异来自数据模型、决策依据、核心算法和输出工件的共同变化，不是名称或文案变化。
 
-2026-09-21 又以 MoonBit、privacy、redaction、consent、k-anonymity、l-diversity、Arrow、
+2026-09-26 又以 MoonBit、privacy、redaction、consent、k-anonymity、l-diversity、Arrow、
 data release、data governance 等关键词扩展检索 GitHub，并阅读候选仓库 README 与隐私
 相关源码。没有发现另一项同时实现 `Arrow RecordBatch + 发布请求 + 行级同意 + k-匿名 +
 l-diversity + 四类 Arrow 输出` 的 MoonBit 项目。
@@ -34,18 +34,25 @@ l-diversity + 四类 Arrow 输出` 的 MoonBit 项目。
 新增了 distinct l-diversity：仅对已通过同意与 k-匿名的固定候选集检查指定敏感属性，
 不足 l 的匿名组继续隔离，并把 l 与多样性列写入 Arrow manifest。
 
+## 项目价值边界
+
+当前方向聚焦合作数据交付。典型使用者是需要把内部样本交给研究单位、外部服务商或合作
+团队的数据工程师。源数据即使满足 schema 和质量规则，也可能因为用途、接收方、逐行同意
+或重新识别风险而不能交付。本项目把这些交付条件变成一次可重复执行的检查，并生成实际可
+交付的 Arrow 批次和交付回执。
+
 ## 逐项对比
 
 | 对比维度 | MoonVerity | MoonSentinel |
 | --- | --- | --- |
 | 主要问题 | 数据是否符合契约和质量规则 | 此次出域是否符合用途、接收方、同意和匿名阈值 |
-| 主要输入 | CSV/JSONL 记录和 JSON contract | Arrow RecordBatch、PrivacyPolicy、ReleaseRequest |
+| 主要输入 | CSV/JSONL 记录和 JSON contract | CSV、JSONL 或 Arrow RecordBatch、PrivacyPolicy、ReleaseRequest |
 | 请求上下文 | 数据集名称与合同版本 | request id、purpose、recipient |
 | 行级逻辑 | 完整性、枚举、范围、唯一性、模式、条件必填等 | 同意是否覆盖当前发布请求 |
 | 集合级逻辑 | 行数、distinct count、质量评分 | 多列准标识符等价类的 k-匿名 |
 | 列处置 | 以检查和报告为主 | 默认拒绝投影、Keep、ReplaceUtf8、Drop |
 | 扩展工具 | profile、contract diff、contract check、benchmark | release manifest、隐私 findings、受控 quarantine |
-| 输出 | 文本/JSON 报告 | approved、quarantine、findings、manifest 四个 Arrow 批次 |
+| 输出 | 文本/JSON 报告 | approved、quarantine、findings、manifest 四个 Arrow 批次；获准数据可导出 CSV/JSONL |
 | 当前公共类型 | Contract、Rule、ValidationReport | PrivacyPolicy、ReleaseRequest、PrivacyReport |
 
 ## 当前代码证据
@@ -65,7 +72,7 @@ l-diversity + 四类 Arrow 输出` 的 MoonBit 项目。
 ### MoonVerity 已实现而 MoonSentinel 当前明确不做
 
 - JSON 数据合同解析和字段 schema；
-- CSV/JSONL 解析、归一化与 round-trip；
+- CSV/JSONL 字段合同解析、质量校验和合同归一化；
 - 非空、范围、枚举、唯一性、模式、字符串长度、条件必填和行数规则；
 - Warning/Error 质量严重度；
 - 数据画像、质量评分和 benchmark suite；
@@ -86,8 +93,8 @@ l-diversity + 四类 Arrow 输出` 的 MoonBit 项目。
 
 ## 互补关系
 
-MoonVerity 可以先检查 CSV/JSONL 的字段和质量，再由上游转换为 Arrow；MoonSentinel 随后
-依据具体发布请求执行隐私授权与最小化。前者回答“数据合不合格”，后者回答“这次能不能
+MoonVerity 可以检查 CSV/JSONL 的字段和质量；MoonSentinel 的 CSV/JSONL 适配只把文本记录转换为
+Arrow，不执行质量校验，随后依据具体发布请求执行隐私授权与最小化。前者回答“数据合不合格”，后者回答“这次能不能
 给、能给哪些行和列”。两者处于连续但不同的处理阶段。
 
 ## 仍需避免的方向

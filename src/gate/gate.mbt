@@ -1,9 +1,10 @@
 ///|
-/// Errors raised when a privacy policy, release request, or Arrow batch is
-/// invalid. Runtime denials are returned as findings inside a ReleaseBundle.
+/// Errors raised when a privacy policy, release request, input batch, or text
+/// document is invalid. Runtime denials are returned as release findings.
 pub(all) enum GateError {
   InvalidPolicy(String)
   InvalidRequest(String)
+  InvalidInput(String)
   InvalidBatch
 } derive(Eq, Debug)
 
@@ -42,10 +43,17 @@ pub(all) struct ColumnPolicy {
 } derive(Eq, Debug)
 
 ///|
-/// Per-row consent requirement for the requested release purpose.
+/// Allowed consent values for one release purpose.
+pub(all) struct PurposeConsent {
+  purpose : String
+  granted_values : Array[String]
+} derive(Eq, Debug)
+
+///|
+/// Per-row consent requirements, separated by release purpose.
 pub(all) struct ConsentRequirement {
   column : String
-  granted_values : Array[String]
+  grants : Array[PurposeConsent]
 } derive(Eq, Debug)
 
 ///|
@@ -118,6 +126,12 @@ pub extend ConsentRequirement with Eq::{not_equal, equal}
 
 ///|
 pub extend ConsentRequirement with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend PurposeConsent with Eq::{not_equal, equal}
+
+///|
+pub extend PurposeConsent with @moonbitlang/core/debug.Debug::{to_repr}
 
 ///|
 pub extend ReleaseRequest with Eq::{not_equal, equal}
@@ -273,6 +287,42 @@ fn validate_unique_strings(label : String, values : Array[String]) -> String? {
 }
 
 ///|
+fn validate_consent_grants(
+  consent : ConsentRequirement,
+  allowed_purposes : Array[String],
+) -> String? {
+  if consent.grants.is_empty() {
+    return Some("consent grants must not be empty")
+  }
+  let purposes = consent.grants.map(grant => grant.purpose)
+  match validate_unique_strings("consent grant purposes", purposes) {
+    Some(message) => return Some(message)
+    None => ()
+  }
+  for grant in consent.grants {
+    if !contains_string(allowed_purposes, grant.purpose) {
+      return Some(
+        "consent grant purpose is not allowed by the policy: " + grant.purpose,
+      )
+    }
+    match
+      validate_unique_strings(
+        "consent granted values for " + grant.purpose,
+        grant.granted_values,
+      ) {
+      Some(message) => return Some(message)
+      None => ()
+    }
+  }
+  for purpose in allowed_purposes {
+    if !contains_string(purposes, purpose) {
+      return Some("consent grant is missing for allowed purpose: " + purpose)
+    }
+  }
+  None
+}
+
+///|
 fn validate_policy_columns(columns : Array[ColumnPolicy]) -> String? {
   if columns.is_empty() {
     return Some("column policy must not be empty")
@@ -398,8 +448,7 @@ pub fn PrivacyPolicy::new(
   if consent.column == "" {
     return Err(InvalidPolicy("consent column must not be empty"))
   }
-  match
-    validate_unique_strings("consent granted values", consent.granted_values) {
+  match validate_consent_grants(consent, allowed_purposes) {
     Some(message) => return Err(InvalidPolicy(message))
     None => ()
   }
@@ -426,7 +475,10 @@ pub fn PrivacyPolicy::new(
     allowed_recipients: allowed_recipients.copy(),
     consent: {
       column: consent.column,
-      granted_values: consent.granted_values.copy(),
+      grants: consent.grants.map(grant => {
+        purpose: grant.purpose,
+        granted_values: grant.granted_values.copy(),
+      }),
     },
     columns: columns.map(column => copy_column_policy(column)),
     minimum_group_size,
@@ -577,16 +629,30 @@ fn take_batch(
 }
 
 ///|
-fn consent_is_granted(value : String, granted_values : Array[String]) -> Bool {
-  contains_string(granted_values, value)
+fn consent_values_for_purpose(
+  consent : ConsentRequirement,
+  purpose : String,
+) -> Array[String]? {
+  for grant in consent.grants {
+    if grant.purpose == purpose {
+      return Some(grant.granted_values)
+    }
+  }
+  None
 }
 
 ///|
 fn inspect_consent(
   policy : PrivacyPolicy,
   batch : @arrow.RecordBatch,
+  purpose : String,
   state : ReleaseState,
 ) -> Unit {
+  let granted_values = match
+    consent_values_for_purpose(policy.consent, purpose) {
+    Some(values) => values
+    None => return
+  }
   guard field_index(batch.schema, policy.consent.column) is Some(index) else {
     dataset_finding(
       state,
@@ -608,10 +674,7 @@ fn inspect_consent(
               Some(policy.consent.column),
               "release consent is missing",
             )
-          Some(value) if !consent_is_granted(
-              value,
-              policy.consent.granted_values,
-            ) =>
+          Some(value) if !contains_string(granted_values, value) =>
             row_finding(
               state,
               ConsentDenied,
@@ -1018,7 +1081,7 @@ pub fn PrivacyPolicy::release(
       "recipient trust boundary is not allowed by the privacy policy",
     )
   }
-  inspect_consent(self, batch, state)
+  inspect_consent(self, batch, request.purpose, state)
   inspect_policy_columns(self, batch, state)
   enforce_k_anonymity(self, batch, state)
   enforce_l_diversity(self, batch, state)

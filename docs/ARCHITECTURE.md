@@ -1,17 +1,27 @@
 # MoonSentinel 技术架构
 
+## 使用位置
+
+MoonSentinel 面向负责导出数据的数据工程师或数据管理员。上游系统完成数据读取和质量检查
+后，可以把 Arrow 批次、扁平 JSONL 或带表头的 CSV、交付策略和本次请求交给 MoonSentinel。合作方只能接收
+`approved`；`quarantine` 留在内部受控区域；`findings` 用于排查；`manifest` 作为本次交付
+的机器可读回执。
+
 ## 系统边界
 
-MoonSentinel 位于已经完成格式解析和质量检查的数据，与即将接收数据的下游系统之间。
-`shunge/arrow` 负责 Arrow Schema、Column、RecordBatch 和 IPC；MoonSentinel 只负责隐私
-发布授权、k-匿名、l-diversity、最小化处置和审计工件。
+MoonSentinel 位于已经完成质量检查的数据，与即将接收数据的下游系统之间。输入既可以是
+Arrow `RecordBatch`，也可以是 JSONL 或 CSV；文本适配器将记录转为 Arrow 列，再进入统一的
+隐私决策核心。JSONL 只接受扁平对象；CSV 必须有表头且各行列数一致，所有 CSV 列按 UTF-8
+字符串处理，未加引号的空单元格转为 null，`""` 保留为空字符串。`shunge/arrow` 负责 Arrow Schema、Column、RecordBatch 和
+IPC；MoonSentinel 负责格式适配、隐私发布授权、k-匿名、l-diversity、最小化处置和审计工件。
 
 ```text
                  ReleaseRequest
             request_id / purpose / recipient
                          |
                          v
-RecordBatch ------> PrivacyPolicy
+CSV / JSONL -> RecordBatch -> PrivacyPolicy
+Arrow RecordBatch -> PrivacyPolicy
                          |
               +----------+----------+
               |                     |
@@ -36,11 +46,10 @@ RecordBatch ------> PrivacyPolicy
 
 ### PrivacyPolicy
 
-保存政策名称、允许用途、允许接收方、同意字段、列分类与处置、最小匿名组大小、敏感
-属性多样性列、最小不同值数量及诊断上限。
+保存政策名称、允许用途、允许接收方、按用途分别配置的同意字段和值、列分类与处置、最小匿名组大小、敏感属性多样性列、最小不同值数量及诊断上限。
 构造时执行以下失败关闭约束：
 
-- 用途、接收方和同意值不能为空或重复；
+- 用途、接收方和同意值不能为空或重复；每个允许用途都必须有独立的同意值配置；
 - 列政策不能重复；
 - `DirectIdentifier` 和 `Sensitive` 不能使用 `Keep`；
 - `QuasiIdentifier` 必须参与发布，才能验证发布结果的 k-匿名；
@@ -77,7 +86,7 @@ l-diversity 配置。
 ## 决策顺序
 
 1. 重新验证输入 `RecordBatch`，防止调用方在构造后修改底层数组；
-2. 检查 purpose 与 recipient 是否在政策允许列表；
+2. 检查 purpose 与 recipient 是否在政策允许列表，并按本次 purpose 选择对应同意值；
 3. 校验 consent 和列策略引用的字段及类型；
 4. 隔离未同意当前用途的行；
 5. 固化候选行集合，按所有准标识符生成确定性等价类 key；
@@ -104,12 +113,12 @@ l-diversity 只在已经通过同意和 k-匿名的固定候选集上计算。�
 
 - 不允许的 purpose 或 recipient：整批拒绝，approved 返回零列零行；
 - consent 列或政策列缺失、类型错误：整批拒绝；
-- 行级 consent、k-匿名或 l-diversity 失败：仅隔离对应行；
+- 行级 consent、k-匿名或 l-diversity 失败：仅隔离对应行；不同用途的同意值不会互相沿用；
 - 无论 findings 是否因上限截断，拒绝总数和行去向均保持准确；
 - findings 不记录原始同意值和准标识符值。
 
 ## 与数据质量层的边界
 
-MoonSentinel 没有通用数据质量 `Rule`、字段 contract、CSV/JSONL parser、profile、quality
-score 或 contract diff。上游可先运行 MoonVerity 等质量工具，再把合格数据交给本项目完成
-隐私发布决策。这一分层是当前架构约束，而不是临时文档声明。
+MoonSentinel 没有通用数据质量 `Rule`、字段 contract、profile、quality score 或 contract diff。
+CSV/JSONL 适配只负责把文本记录转换为 Arrow，不执行字段质量规则；CSV 语法检查不等同于数据质量校验。
+上游可先运行 MoonVerity 等质量工具，再把合格数据交给本项目完成隐私发布决策。
