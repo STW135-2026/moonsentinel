@@ -1,11 +1,12 @@
 ///|
+#derive(Eq)
 priv enum JsonlKind {
   JsonlNull
   JsonlBoolean
   JsonlInt64
   JsonlFloat64
   JsonlUtf8
-} derive(Eq)
+}
 
 ///|
 fn jsonl_kind(value : Json, field : String) -> Result[JsonlKind, GateError] {
@@ -194,7 +195,7 @@ pub fn jsonl_to_batch(input : String) -> Result[@arrow.RecordBatch, GateError] {
 ///|
 fn jsonl_column_value(
   column : @arrow.Column,
-  row : Int,
+  row : Int32,
   field : String,
 ) -> Result[String, GateError] {
   match column {

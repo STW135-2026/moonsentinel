@@ -63,7 +63,7 @@ fn research_batch() -> @arrow.RecordBatch {
 }
 
 ///|
-fn research_policy(max_findings? : Int = 100) -> @gate.PrivacyPolicy {
+fn research_policy(max_findings~ : Int32 = 100) -> @gate.PrivacyPolicy {
   @gate.PrivacyPolicy::new(
     "fraud-research-v1",
     ["fraud_research", "analytics"],
@@ -154,7 +154,7 @@ test "release binds purpose, consent, k-anonymity, l-diversity, and minimization
   assert_true(
     bundle.approved().columns[0]
     is @arrow.Strings(
-      [Some("[EMAIL]"), Some("[EMAIL]"), Some("[EMAIL]"), Some("[EMAIL]")]
+      [Some("[EMAIL]"), Some("[EMAIL]"), Some("[EMAIL]"), Some("[EMAIL]")],
     ),
   )
 }
@@ -174,7 +174,7 @@ test "JSONL input uses the release gate and approved output round-trips" {
   let bundle = research_policy().release(batch, research_request()).unwrap()
   assert_eq(bundle.report().approved_row_count(), 4)
   let output = @gate.batch_to_jsonl(bundle.approved()).unwrap()
-  assert_eq(output.split("\n").length(), 4)
+  assert_eq(output.split("\n").count(), 4)
   let restored = @gate.jsonl_to_batch(output).unwrap()
   assert_eq(restored.num_rows, 4)
   assert_true(output.contains("[EMAIL]"))

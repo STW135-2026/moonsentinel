@@ -242,7 +242,7 @@ fn csv_escape_field(value : String) -> Result[String, GateError] {
 ///|
 fn csv_column_value(
   column : @arrow.Column,
-  row : Int,
+  row : Int32,
 ) -> Result[String?, GateError] {
   match column {
     @arrow.Nulls(_) => Ok(None)

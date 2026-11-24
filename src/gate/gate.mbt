@@ -1,72 +1,81 @@
 ///|
 /// Errors raised when a privacy policy, release request, input batch, or text
 /// document is invalid. Runtime denials are returned as release findings.
+#derive(Eq, Debug)
 pub(all) enum GateError {
   InvalidPolicy(String)
   InvalidRequest(String)
   InvalidInput(String)
   InvalidBatch
-} derive(Eq, Debug)
+}
 
 ///|
 /// Trust boundary of the system that will receive the released data.
+#derive(Eq, Debug)
 pub(all) enum Recipient {
   Internal
   Partner
   Public
-} derive(Eq, Debug)
+}
 
 ///|
 /// Privacy classification used to validate release treatments.
+#derive(Eq, Debug)
 pub(all) enum DataClass {
   PublicData
   QuasiIdentifier
   Sensitive
   DirectIdentifier
-} derive(Eq, Debug)
+}
 
 ///|
 /// Output treatment for one input column. Columns absent from the policy are
 /// denied by default and never appear in the released RecordBatch.
+#derive(Eq, Debug)
 pub(all) enum Treatment {
   Keep
   ReplaceUtf8(String)
   Drop
-} derive(Eq, Debug)
+}
 
 ///|
 /// Classification and output treatment for one input column.
+#derive(Eq, Debug)
 pub(all) struct ColumnPolicy {
   column : String
   classification : DataClass
   treatment : Treatment
-} derive(Eq, Debug)
+}
 
 ///|
 /// Allowed consent values for one release purpose.
+#derive(Eq, Debug)
 pub(all) struct PurposeConsent {
   purpose : String
   granted_values : Array[String]
-} derive(Eq, Debug)
+}
 
 ///|
 /// Per-row consent requirements, separated by release purpose.
+#derive(Eq, Debug)
 pub(all) struct ConsentRequirement {
   column : String
   grants : Array[PurposeConsent]
-} derive(Eq, Debug)
+}
 
 ///|
 /// One release attempt. Request identifiers are copied into findings and the
 /// release manifest to make the decision traceable.
+#derive(Eq, Debug)
 pub(all) struct ReleaseRequest {
   request_id : String
   purpose : String
   recipient : Recipient
-} derive(Eq, Debug)
+}
 
 ///|
 /// Stable machine-readable denial reasons.
+#derive(Eq, Debug)
 pub(all) enum FindingCode {
   PurposeNotAllowed
   RecipientNotAllowed
@@ -76,17 +85,18 @@ pub(all) enum FindingCode {
   ConsentDenied
   KAnonymityViolation
   LDiversityViolation
-} derive(Eq, Debug)
+}
 
 ///|
 /// One privacy denial. `row=None` denotes a release-wide denial.
+#derive(Eq, Debug)
 pub(all) struct Finding {
   request_id : String
   code : FindingCode
-  row : Int?
+  row : Int32?
   column : String?
   message : String
-} derive(Eq, Debug)
+}
 
 ///|
 /// Export only the derived methods that callers are expected to use. Newer
@@ -159,10 +169,10 @@ pub struct PrivacyPolicy {
   allowed_recipients : Array[Recipient]
   consent : ConsentRequirement
   columns : Array[ColumnPolicy]
-  minimum_group_size : Int
+  minimum_group_size : Int32
   diversity_columns : Array[String]
-  minimum_distinct_sensitive_values : Int
-  max_findings : Int
+  minimum_distinct_sensitive_values : Int32
+  max_findings : Int32
 }
 
 ///|
@@ -170,16 +180,16 @@ pub struct PrivacyPolicy {
 pub struct PrivacyReport {
   policy_name : String
   request_value : ReleaseRequest
-  source_rows : Int
-  denial_count_value : Int
+  source_rows : Int32
+  denial_count_value : Int32
   findings_value : Array[Finding]
   truncated_value : Bool
-  approved_indices : Array[Int]
-  quarantined_indices : Array[Int]
+  approved_indices : Array[Int32]
+  quarantined_indices : Array[Int32]
   released_columns_value : Array[String]
-  minimum_group_size_value : Int
+  minimum_group_size_value : Int32
   diversity_columns_value : Array[String]
-  minimum_distinct_sensitive_values_value : Int
+  minimum_distinct_sensitive_values_value : Int32
 }
 
 ///|
@@ -195,10 +205,10 @@ pub struct ReleaseBundle {
 ///|
 priv struct ReleaseState {
   findings : Array[Finding]
-  counts : Array[Int]
+  counts : Array[Int32]
   rejected : Array[Bool]
   dataset_denied : Array[Bool]
-  max_findings : Int
+  max_findings : Int32
   request_id : String
 }
 
@@ -382,7 +392,7 @@ fn validate_policy_columns(columns : Array[ColumnPolicy]) -> String? {
 fn validate_diversity_columns(
   columns : Array[ColumnPolicy],
   diversity_columns : Array[String],
-  minimum_distinct_sensitive_values : Int,
+  minimum_distinct_sensitive_values : Int32,
 ) -> String? {
   if minimum_distinct_sensitive_values < 1 {
     return Some("minimum_distinct_sensitive_values must be positive")
@@ -423,10 +433,10 @@ pub fn PrivacyPolicy::new(
   allowed_recipients : Array[Recipient],
   consent : ConsentRequirement,
   columns : Array[ColumnPolicy],
-  minimum_group_size? : Int = 2,
-  diversity_columns? : Array[String] = [],
-  minimum_distinct_sensitive_values? : Int = 1,
-  max_findings? : Int = 100,
+  minimum_group_size~ : Int32 = 2,
+  diversity_columns~ : Array[String] = [],
+  minimum_distinct_sensitive_values~ : Int32 = 1,
+  max_findings~ : Int32 = 100,
 ) -> Result[PrivacyPolicy, GateError] {
   if name == "" {
     return Err(InvalidPolicy("policy name must not be empty"))
@@ -494,14 +504,14 @@ pub fn PrivacyPolicy::name(self : PrivacyPolicy) -> String {
 }
 
 ///|
-pub fn PrivacyPolicy::minimum_group_size(self : PrivacyPolicy) -> Int {
+pub fn PrivacyPolicy::minimum_group_size(self : PrivacyPolicy) -> Int32 {
   self.minimum_group_size
 }
 
 ///|
 pub fn PrivacyPolicy::minimum_distinct_sensitive_values(
   self : PrivacyPolicy,
-) -> Int {
+) -> Int32 {
   self.minimum_distinct_sensitive_values
 }
 
@@ -521,7 +531,7 @@ pub fn ReleaseRequest::new(
 }
 
 ///|
-fn field_index(schema : @arrow.Schema, name : String) -> Int? {
+fn field_index(schema : @arrow.Schema, name : String) -> Int32? {
   for index in 0..<schema.fields.length() {
     if schema.fields[index].name == name {
       return Some(index)
@@ -567,7 +577,7 @@ fn dataset_finding(
 fn row_finding(
   state : ReleaseState,
   code : FindingCode,
-  row : Int,
+  row : Int32,
   column : String?,
   message : String,
 ) -> Unit {
@@ -601,7 +611,7 @@ fn validated_batch(
 }
 
 ///|
-fn take_column(column : @arrow.Column, indices : Array[Int]) -> @arrow.Column {
+fn take_column(column : @arrow.Column, indices : Array[Int32]) -> @arrow.Column {
   match column {
     @arrow.Nulls(_) => @arrow.Nulls(indices.length())
     @arrow.Booleans(values) =>
@@ -620,7 +630,7 @@ fn take_column(column : @arrow.Column, indices : Array[Int]) -> @arrow.Column {
 ///|
 fn take_batch(
   batch : @arrow.RecordBatch,
-  indices : Array[Int],
+  indices : Array[Int32],
 ) -> Result[@arrow.RecordBatch, GateError] {
   validated_batch(
     batch.schema,
@@ -765,7 +775,7 @@ fn optional_string_key(value : String?) -> String {
 }
 
 ///|
-fn optional_int_key(value : Int?) -> String {
+fn optional_int_key(value : Int32?) -> String {
   match value {
     None => "n"
     Some(number) => "i:" + number.to_string()
@@ -790,7 +800,7 @@ fn optional_bool_key(value : Bool?) -> String {
 }
 
 ///|
-fn quasi_value_key(column : @arrow.Column, row : Int) -> String {
+fn quasi_value_key(column : @arrow.Column, row : Int32) -> String {
   match column {
     @arrow.Booleans(values) => optional_bool_key(values[row])
     @arrow.Int32s(values) => optional_int_key(values[row])
@@ -804,8 +814,8 @@ fn quasi_value_key(column : @arrow.Column, row : Int) -> String {
 fn quasi_indices(
   policy : PrivacyPolicy,
   batch : @arrow.RecordBatch,
-) -> Array[Int] {
-  let result : Array[Int] = []
+) -> Array[Int32] {
+  let result : Array[Int32] = []
   for column_policy in policy.columns {
     if column_policy.classification is QuasiIdentifier {
       match field_index(batch.schema, column_policy.column) {
@@ -831,8 +841,8 @@ fn quasi_names(policy : PrivacyPolicy) -> Array[String] {
 ///|
 fn anonymity_key(
   batch : @arrow.RecordBatch,
-  indices : Array[Int],
-  row : Int,
+  indices : Array[Int32],
+  row : Int32,
 ) -> String {
   indices.map(index => quasi_value_key(batch.columns[index], row)).join("|")
 }
@@ -877,7 +887,10 @@ fn enforce_k_anonymity(
 }
 
 ///|
-fn distinct_non_null_strings(values : Array[String?], rows : Array[Int]) -> Int {
+fn distinct_non_null_strings(
+  values : Array[String?],
+  rows : Array[Int32],
+) -> Int32 {
   let distinct : Array[String] = []
   for row in rows {
     match values[row] {
@@ -912,7 +925,7 @@ fn enforce_l_diversity(
   }
   for row in 0..<batch.num_rows {
     if eligible[row] {
-      let group_rows : Array[Int] = []
+      let group_rows : Array[Int32] = []
       for other in 0..<batch.num_rows {
         if eligible[other] && keys[other] == keys[row] {
           group_rows.push(other)
@@ -959,7 +972,7 @@ fn empty_batch() -> Result[@arrow.RecordBatch, GateError] {
 fn project_approved(
   policy : PrivacyPolicy,
   batch : @arrow.RecordBatch,
-  indices : Array[Int],
+  indices : Array[Int32],
 ) -> Result[@arrow.RecordBatch, GateError] {
   let fields : Array[@arrow.Field] = []
   let columns : Array[@arrow.Column] = []
@@ -1085,8 +1098,8 @@ pub fn PrivacyPolicy::release(
   inspect_policy_columns(self, batch, state)
   enforce_k_anonymity(self, batch, state)
   enforce_l_diversity(self, batch, state)
-  let approved_indices : Array[Int] = []
-  let quarantined_indices : Array[Int] = []
+  let approved_indices : Array[Int32] = []
+  let quarantined_indices : Array[Int32] = []
   for row in 0..<batch.num_rows {
     if state.rejected[row] {
       quarantined_indices.push(row)
@@ -1158,22 +1171,22 @@ pub fn PrivacyReport::passed(self : PrivacyReport) -> Bool {
 }
 
 ///|
-pub fn PrivacyReport::source_row_count(self : PrivacyReport) -> Int {
+pub fn PrivacyReport::source_row_count(self : PrivacyReport) -> Int32 {
   self.source_rows
 }
 
 ///|
-pub fn PrivacyReport::approved_row_count(self : PrivacyReport) -> Int {
+pub fn PrivacyReport::approved_row_count(self : PrivacyReport) -> Int32 {
   self.approved_indices.length()
 }
 
 ///|
-pub fn PrivacyReport::quarantined_row_count(self : PrivacyReport) -> Int {
+pub fn PrivacyReport::quarantined_row_count(self : PrivacyReport) -> Int32 {
   self.quarantined_indices.length()
 }
 
 ///|
-pub fn PrivacyReport::denial_count(self : PrivacyReport) -> Int {
+pub fn PrivacyReport::denial_count(self : PrivacyReport) -> Int32 {
   self.denial_count_value
 }
 
