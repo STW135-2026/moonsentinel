@@ -18,44 +18,49 @@ pub fn jsonl_to_batch(String) -> Result[@arrow.RecordBatch, GateError]
 // Errors
 
 // Types and methods
+#derive(Eq, @debug.Debug)
 pub(all) struct ColumnPolicy {
   column : String
   classification : DataClass
   treatment : Treatment
-} derive(Eq, @debug.Debug)
+}
 pub fn ColumnPolicy::equal(Self, Self) -> Bool
 pub fn ColumnPolicy::not_equal(Self, Self) -> Bool
 pub fn ColumnPolicy::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) struct ConsentRequirement {
   column : String
   grants : Array[PurposeConsent]
-} derive(Eq, @debug.Debug)
+}
 pub fn ConsentRequirement::equal(Self, Self) -> Bool
 pub fn ConsentRequirement::not_equal(Self, Self) -> Bool
 pub fn ConsentRequirement::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum DataClass {
   PublicData
   QuasiIdentifier
   Sensitive
   DirectIdentifier
-} derive(Eq, @debug.Debug)
+}
 pub fn DataClass::equal(Self, Self) -> Bool
 pub fn DataClass::not_equal(Self, Self) -> Bool
 pub fn DataClass::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) struct Finding {
   request_id : String
   code : FindingCode
-  row : Int?
+  row : Int32?
   column : String?
   message : String
-} derive(Eq, @debug.Debug)
+}
 pub fn Finding::equal(Self, Self) -> Bool
 pub fn Finding::not_equal(Self, Self) -> Bool
 pub fn Finding::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum FindingCode {
   PurposeNotAllowed
   RecipientNotAllowed
@@ -65,17 +70,18 @@ pub(all) enum FindingCode {
   ConsentDenied
   KAnonymityViolation
   LDiversityViolation
-} derive(Eq, @debug.Debug)
+}
 pub fn FindingCode::equal(Self, Self) -> Bool
 pub fn FindingCode::not_equal(Self, Self) -> Bool
 pub fn FindingCode::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum GateError {
   InvalidPolicy(String)
   InvalidRequest(String)
   InvalidInput(String)
   InvalidBatch
-} derive(Eq, @debug.Debug)
+}
 pub fn GateError::equal(Self, Self) -> Bool
 pub fn GateError::not_equal(Self, Self) -> Bool
 pub fn GateError::to_repr(Self) -> @debug.Repr
@@ -86,55 +92,57 @@ pub struct PrivacyPolicy {
   allowed_recipients : Array[Recipient]
   consent : ConsentRequirement
   columns : Array[ColumnPolicy]
-  minimum_group_size : Int
+  minimum_group_size : Int32
   diversity_columns : Array[String]
-  minimum_distinct_sensitive_values : Int
-  max_findings : Int
+  minimum_distinct_sensitive_values : Int32
+  max_findings : Int32
 }
-pub fn PrivacyPolicy::minimum_distinct_sensitive_values(Self) -> Int
-pub fn PrivacyPolicy::minimum_group_size(Self) -> Int
+pub fn PrivacyPolicy::minimum_distinct_sensitive_values(Self) -> Int32
+pub fn PrivacyPolicy::minimum_group_size(Self) -> Int32
 pub fn PrivacyPolicy::name(Self) -> String
-pub fn PrivacyPolicy::new(String, Array[String], Array[Recipient], ConsentRequirement, Array[ColumnPolicy], minimum_group_size? : Int, diversity_columns? : Array[String], minimum_distinct_sensitive_values? : Int, max_findings? : Int) -> Result[Self, GateError]
+pub fn PrivacyPolicy::new(String, Array[String], Array[Recipient], ConsentRequirement, Array[ColumnPolicy], minimum_group_size? : Int32, diversity_columns? : Array[String], minimum_distinct_sensitive_values? : Int32, max_findings? : Int32) -> Result[Self, GateError]
 pub fn PrivacyPolicy::release(Self, @arrow.RecordBatch, ReleaseRequest) -> Result[ReleaseBundle, GateError]
 
 pub struct PrivacyReport {
   policy_name : String
   request_value : ReleaseRequest
-  source_rows : Int
-  denial_count_value : Int
+  source_rows : Int32
+  denial_count_value : Int32
   findings_value : Array[Finding]
   truncated_value : Bool
-  approved_indices : Array[Int]
-  quarantined_indices : Array[Int]
+  approved_indices : Array[Int32]
+  quarantined_indices : Array[Int32]
   released_columns_value : Array[String]
-  minimum_group_size_value : Int
+  minimum_group_size_value : Int32
   diversity_columns_value : Array[String]
-  minimum_distinct_sensitive_values_value : Int
+  minimum_distinct_sensitive_values_value : Int32
 }
-pub fn PrivacyReport::approved_row_count(Self) -> Int
+pub fn PrivacyReport::approved_row_count(Self) -> Int32
 pub fn PrivacyReport::decision(Self) -> String
-pub fn PrivacyReport::denial_count(Self) -> Int
+pub fn PrivacyReport::denial_count(Self) -> Int32
 pub fn PrivacyReport::findings(Self) -> Array[Finding]
 pub fn PrivacyReport::passed(Self) -> Bool
-pub fn PrivacyReport::quarantined_row_count(Self) -> Int
+pub fn PrivacyReport::quarantined_row_count(Self) -> Int32
 pub fn PrivacyReport::released_columns(Self) -> Array[String]
-pub fn PrivacyReport::source_row_count(Self) -> Int
+pub fn PrivacyReport::source_row_count(Self) -> Int32
 pub fn PrivacyReport::summary(Self) -> String
 pub fn PrivacyReport::truncated(Self) -> Bool
 
+#derive(Eq, @debug.Debug)
 pub(all) struct PurposeConsent {
   purpose : String
   granted_values : Array[String]
-} derive(Eq, @debug.Debug)
+}
 pub fn PurposeConsent::equal(Self, Self) -> Bool
 pub fn PurposeConsent::not_equal(Self, Self) -> Bool
 pub fn PurposeConsent::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum Recipient {
   Internal
   Partner
   Public
-} derive(Eq, @debug.Debug)
+}
 pub fn Recipient::equal(Self, Self) -> Bool
 pub fn Recipient::not_equal(Self, Self) -> Bool
 pub fn Recipient::to_repr(Self) -> @debug.Repr
@@ -152,21 +160,23 @@ pub fn ReleaseBundle::manifest(Self) -> @arrow.RecordBatch
 pub fn ReleaseBundle::quarantine(Self) -> @arrow.RecordBatch
 pub fn ReleaseBundle::report(Self) -> PrivacyReport
 
+#derive(Eq, @debug.Debug)
 pub(all) struct ReleaseRequest {
   request_id : String
   purpose : String
   recipient : Recipient
-} derive(Eq, @debug.Debug)
+}
 pub fn ReleaseRequest::equal(Self, Self) -> Bool
 pub fn ReleaseRequest::new(String, String, Recipient) -> Result[Self, GateError]
 pub fn ReleaseRequest::not_equal(Self, Self) -> Bool
 pub fn ReleaseRequest::to_repr(Self) -> @debug.Repr
 
+#derive(Eq, @debug.Debug)
 pub(all) enum Treatment {
   Keep
   ReplaceUtf8(String)
   Drop
-} derive(Eq, @debug.Debug)
+}
 pub fn Treatment::equal(Self, Self) -> Bool
 pub fn Treatment::not_equal(Self, Self) -> Bool
 pub fn Treatment::to_repr(Self) -> @debug.Repr
