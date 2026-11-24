@@ -848,7 +848,34 @@ fn anonymity_key(
 }
 
 ///|
-fn enforce_k_anonymity(
+priv struct AnonymityGroup {
+  rows : Array[Int32]
+  failing_diversity_columns : Array[String]
+}
+
+///|
+fn reaches_distinct_threshold(
+  values : Array[String?],
+  rows : Array[Int32],
+  minimum : Int32,
+) -> Bool {
+  let seen : Map[String, Bool] = Map([])
+  for row in rows {
+    match values[row] {
+      Some(value) => {
+        seen[value] = true
+        if seen.length() >= minimum {
+          return true
+        }
+      }
+      None => ()
+    }
+  }
+  false
+}
+
+///|
+fn enforce_anonymity(
   policy : PrivacyPolicy,
   batch : @arrow.RecordBatch,
   state : ReleaseState,
@@ -858,95 +885,70 @@ fn enforce_k_anonymity(
   }
   let indices = quasi_indices(policy, batch)
   let names = quasi_names(policy).join(",")
-  let eligible = state.rejected.map(value => !value)
-  let keys = Array::make(batch.num_rows, "")
+  let by_key : Map[String, Int32] = Map([])
+  let groups : Array[AnonymityGroup] = []
+  let row_group = Array::make(batch.num_rows, -1)
+  // This fixed set includes only rows that passed consent.
   for row in 0..<batch.num_rows {
-    if eligible[row] {
-      keys[row] = anonymity_key(batch, indices, row)
-    }
-  }
-  for row in 0..<batch.num_rows {
-    if eligible[row] {
-      let mut group_size = 0
-      for other in 0..<batch.num_rows {
-        if eligible[other] && keys[other] == keys[row] {
-          group_size += 1
+    if !state.rejected[row] {
+      let key = anonymity_key(batch, indices, row)
+      let group = match by_key.get(key) {
+        Some(index) => index
+        None => {
+          let index = groups.length()
+          by_key[key] = index
+          groups.push({ rows: [], failing_diversity_columns: [], })
+          index
         }
       }
-      if group_size < policy.minimum_group_size {
-        row_finding(
-          state,
-          KAnonymityViolation,
-          row,
-          Some(names),
-          "quasi-identifier group is smaller than the configured minimum",
-        )
-      }
+      row_group[row] = group
+      groups[group].rows.push(row)
     }
   }
-}
-
-///|
-fn distinct_non_null_strings(
-  values : Array[String?],
-  rows : Array[Int32],
-) -> Int32 {
-  let distinct : Array[String] = []
-  for row in rows {
-    match values[row] {
-      Some(value) =>
-        if !contains_string(distinct, value) {
-          distinct.push(value)
-        }
-      None => ()
+  // Preserve stage order and source row order even for interleaved groups.
+  for row in 0..<batch.num_rows {
+    let group = row_group[row]
+    if group >= 0 && groups[group].rows.length() < policy.minimum_group_size {
+      row_finding(
+        state,
+        KAnonymityViolation,
+        row,
+        Some(names),
+        "quasi-identifier group is smaller than the configured minimum",
+      )
     }
   }
-  distinct.length()
-}
-
-///|
-fn enforce_l_diversity(
-  policy : PrivacyPolicy,
-  batch : @arrow.RecordBatch,
-  state : ReleaseState,
-) -> Unit {
-  if state.dataset_denied[0] ||
-    policy.minimum_distinct_sensitive_values <= 1 ||
-    policy.diversity_columns.is_empty() {
+  let minimum = policy.minimum_distinct_sensitive_values
+  if minimum <= 1 || policy.diversity_columns.is_empty() {
     return
   }
-  let quasi = quasi_indices(policy, batch)
-  let eligible = state.rejected.map(value => !value)
-  let keys = Array::make(batch.num_rows, "")
-  for row in 0..<batch.num_rows {
-    if eligible[row] {
-      keys[row] = anonymity_key(batch, quasi, row)
+  let diversity : Array[(String, Array[String?])] = []
+  for name in policy.diversity_columns {
+    guard field_index(batch.schema, name) is Some(index) else { continue }
+    if batch.columns[index] is @arrow.Strings(values) {
+      diversity.push((name, values))
+    }
+  }
+  for group in groups {
+    if group.rows.length() >= policy.minimum_group_size {
+      for (name, values) in diversity {
+        if !reaches_distinct_threshold(values, group.rows, minimum) {
+          group.failing_diversity_columns.push(name)
+        }
+      }
     }
   }
   for row in 0..<batch.num_rows {
-    if eligible[row] {
-      let group_rows : Array[Int32] = []
-      for other in 0..<batch.num_rows {
-        if eligible[other] && keys[other] == keys[row] {
-          group_rows.push(other)
-        }
-      }
-      for name in policy.diversity_columns {
-        guard field_index(batch.schema, name) is Some(index) else { continue }
-        match batch.columns[index] {
-          @arrow.Strings(values) =>
-            if distinct_non_null_strings(values, group_rows) <
-              policy.minimum_distinct_sensitive_values {
-              row_finding(
-                state,
-                LDiversityViolation,
-                row,
-                Some(name),
-                "sensitive values in the quasi-identifier group are less diverse than the configured minimum",
-              )
-            }
-          _ => ()
-        }
+    let group = row_group[row]
+    if group >= 0 {
+      for name in groups[group].failing_diversity_columns {
+        row_finding(
+          state,
+          LDiversityViolation,
+          row,
+          Some(name),
+          "sensitive values in the quasi-identifier group are less diverse than the configured minimum",
+        )
       }
     }
   }
@@ -1096,8 +1098,7 @@ pub fn PrivacyPolicy::release(
   }
   inspect_consent(self, batch, request.purpose, state)
   inspect_policy_columns(self, batch, state)
-  enforce_k_anonymity(self, batch, state)
-  enforce_l_diversity(self, batch, state)
+  enforce_anonymity(self, batch, state)
   let approved_indices : Array[Int32] = []
   let quarantined_indices : Array[Int32] = []
   for row in 0..<batch.num_rows {

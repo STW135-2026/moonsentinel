@@ -585,3 +585,148 @@ test "mutated invalid Arrow batches are rejected" {
     is Err(@gate.InvalidBatch),
   )
 }
+
+///|
+test "grouped release preserves fixed eligibility and row-major findings" {
+  let schema = @arrow.Schema::new([
+    @arrow.Field::new("q1", @arrow.Utf8),
+    @arrow.Field::new("q2", @arrow.Utf8),
+    @arrow.Field::new("consent", @arrow.Utf8),
+    @arrow.Field::new("first", @arrow.Utf8),
+    @arrow.Field::new("second", @arrow.Utf8),
+    @arrow.Field::new("source_row", @arrow.Int32),
+  ])
+  let batch = try! @arrow.RecordBatch::new(schema, [
+    @arrow.Strings([
+      Some("x|s1:y"),
+      None,
+      Some("x"),
+      Some(""),
+      Some("x|s1:y"),
+      None,
+      Some("x"),
+      Some(""),
+      Some("x|s1:y"),
+    ]),
+    @arrow.Strings([
+      Some(""),
+      Some(""),
+      Some("y|s0:"),
+      None,
+      Some(""),
+      Some(""),
+      Some("y|s0:"),
+      None,
+      Some(""),
+    ]),
+    @arrow.Strings([
+      Some("yes"),
+      Some("yes"),
+      Some("yes"),
+      Some("yes"),
+      Some("yes"),
+      Some("no"),
+      Some("yes"),
+      Some("yes"),
+      Some("no"),
+    ]),
+    @arrow.Strings([
+      Some("same"),
+      Some("a"),
+      Some("same"),
+      Some("a"),
+      Some("same"),
+      Some("b"),
+      Some("same"),
+      Some("b"),
+      Some("different"),
+    ]),
+    @arrow.Strings([
+      None,
+      Some("a"),
+      Some("a"),
+      Some("a"),
+      None,
+      Some("b"),
+      Some("b"),
+      Some("b"),
+      Some("different"),
+    ]),
+    @arrow.Int32s(Array::makei(9, row => Some(row))),
+  ])
+  let columns : Array[@gate.ColumnPolicy] = [
+    {
+      column: "q1",
+      classification: @gate.QuasiIdentifier,
+      treatment: @gate.Keep,
+    },
+    {
+      column: "q2",
+      classification: @gate.QuasiIdentifier,
+      treatment: @gate.Keep,
+    },
+    { column: "first", classification: @gate.Sensitive, treatment: @gate.Drop, },
+    {
+      column: "second",
+      classification: @gate.Sensitive,
+      treatment: @gate.Drop,
+    },
+    {
+      column: "source_row",
+      classification: @gate.PublicData,
+      treatment: @gate.Keep,
+    },
+  ]
+  let request = @gate.ReleaseRequest::new(
+    "grouped-order",
+    "share",
+    @gate.Partner,
+  ).unwrap()
+  for cap in [100, 5] {
+    let policy = @gate.PrivacyPolicy::new(
+      "group-order",
+      ["share"],
+      [@gate.Partner],
+      {
+        column: "consent",
+        grants: [{ purpose: "share", granted_values: ["yes"], }],
+      },
+      columns,
+      minimum_group_size=2,
+      diversity_columns=["first", "second"],
+      minimum_distinct_sensitive_values=2,
+      max_findings=cap,
+    ).unwrap()
+    let bundle = policy.release(batch, request).unwrap()
+    let report = bundle.report()
+    assert_eq(report.approved_row_count(), 2)
+    assert_eq(report.quarantined_row_count(), 7)
+    assert_eq(report.denial_count(), 9)
+    assert_eq(report.truncated(), cap == 5)
+    assert_true(
+      bundle.approved().columns[2] is @arrow.Int32s([Some(3), Some(7)]),
+    )
+    assert_true(
+      bundle.quarantine().columns[5]
+      is @arrow.Int32s(
+        [Some(0), Some(1), Some(2), Some(4), Some(5), Some(6), Some(8)],
+      ),
+    )
+    let observed = report.findings().map(f => (f.code, f.row, f.column))
+    let expected : Array[(@gate.FindingCode, Int32?, String?)] = [
+      (@gate.ConsentDenied, Some(5), Some("consent")),
+      (@gate.ConsentDenied, Some(8), Some("consent")),
+      (@gate.KAnonymityViolation, Some(1), Some("q1,q2")),
+      (@gate.LDiversityViolation, Some(0), Some("first")),
+      (@gate.LDiversityViolation, Some(0), Some("second")),
+      (@gate.LDiversityViolation, Some(2), Some("first")),
+      (@gate.LDiversityViolation, Some(4), Some("first")),
+      (@gate.LDiversityViolation, Some(4), Some("second")),
+      (@gate.LDiversityViolation, Some(6), Some("first")),
+    ]
+    assert_eq(observed.length(), if cap == 5 { 5 } else { 9 })
+    for i in 0..<observed.length() {
+      assert_eq(observed[i], expected[i])
+    }
+  }
+}

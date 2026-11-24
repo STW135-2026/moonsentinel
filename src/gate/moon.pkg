@@ -4,3 +4,7 @@ import {
   "moonbitlang/core/json",
   "shunge/arrow",
 }
+
+import {
+  "moonbitlang/core/bench",
+} for "test"
